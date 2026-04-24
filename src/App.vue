@@ -1024,58 +1024,364 @@ async function exportPDF() {
 
     // 创建临时容器渲染内容
     const container = document.createElement('div');
-    container.style.width = '800px';
-    container.style.padding = '20px';
+    container.className = 'markdown-body';
+    container.style.width = '210mm';
+    container.style.padding = '25mm 20mm 30mm 20mm';
     container.style.background = 'white';
-    container.style.fontFamily = "'Segoe UI', system-ui, sans-serif";
-    container.style.lineHeight = '1.6';
-    container.style.color = '#333';
+    container.style.fontFamily = "'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif";
+    container.style.fontSize = '11pt';
+    container.style.lineHeight = '1.8';
+    container.style.color = '#2c3e50';
+    container.style.boxSizing = 'border-box';
     container.innerHTML = renderedHTML.value;
 
-    // 添加样式
+    // 添加专业的Markdown样式（包含分页控制）
     const style = document.createElement('style');
     style.textContent = `
-      .markdown-body h1 { font-size: 24px; font-weight: bold; margin: 20px 0 10px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
-      .markdown-body h2 { font-size: 20px; font-weight: bold; margin: 18px 0 8px; }
-      .markdown-body h3 { font-size: 16px; font-weight: bold; margin: 16px 0 6px; }
-      .markdown-body p { margin: 10px 0; }
-      .markdown-body pre { background: #f5f5f5; padding: 1em; border-radius: 6px; overflow-x: auto; margin: 10px 0; }
-      .markdown-body code { background: #f5f5f5; padding: 0.2em 0.4em; border-radius: 3px; font-family: monospace; }
-      .markdown-body blockquote { border-left: 4px solid #ddd; padding-left: 1em; color: #666; margin: 10px 0; }
-      .markdown-body ul, .markdown-body ol { padding-left: 2em; margin: 10px 0; }
-      .markdown-body li { margin: 4px 0; }
-      .markdown-body table { border-collapse: collapse; width: 100%; margin: 10px 0; }
-      .markdown-body th, .markdown-body td { border: 1px solid #ddd; padding: 8px 12px; }
-      .markdown-body th { background: #f5f5f5; }
-      .markdown-body img { max-width: 100%; border-radius: 4px; margin: 10px 0; }
-      .markdown-body hr { border: none; border-top: 1px solid #ddd; margin: 20px 0; }
-      .markdown-body a { color: #0066cc; }
-      .katex-display { margin: 10px 0; }
+      .markdown-body {
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      /* 标题样式 - 避免分页 */
+      .markdown-body h1 {
+        font-size: 24pt;
+        font-weight: 700;
+        margin: 0.8em 0 0.4em 0;
+        padding-bottom: 0.3em;
+        border-bottom: 2px solid #e1e4e8;
+        color: #1a1a1a;
+        line-height: 1.3;
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+      .markdown-body h2 {
+        font-size: 18pt;
+        font-weight: 600;
+        margin: 0.8em 0 0.4em 0;
+        padding-bottom: 0.25em;
+        border-bottom: 1px solid #e1e4e8;
+        color: #24292e;
+        line-height: 1.4;
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+      .markdown-body h3 {
+        font-size: 14pt;
+        font-weight: 600;
+        margin: 0.8em 0 0.4em 0;
+        color: #24292e;
+        line-height: 1.4;
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+      .markdown-body h4 {
+        font-size: 12pt;
+        font-weight: 600;
+        margin: 0.8em 0 0.3em 0;
+        color: #24292e;
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+      .markdown-body h5, .markdown-body h6 {
+        font-size: 11pt;
+        font-weight: 600;
+        margin: 0.8em 0 0.3em 0;
+        color: #586069;
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+
+      /* 段落和文本 - 避免内部断页 */
+      .markdown-body p {
+        margin: 0.8em 0;
+        text-align: justify;
+        orphans: 3;
+        widows: 3;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+
+      /* 代码块 - 避免内部断页 */
+      .markdown-body pre {
+        background: #f6f8fa;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        padding: 1em;
+        overflow-x: auto;
+        margin: 1em 0;
+        font-size: 10pt;
+        line-height: 1.5;
+        box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .markdown-body pre code {
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      }
+
+      /* 行内代码 */
+      .markdown-body code {
+        background: #f6f8fa;
+        padding: 0.2em 0.4em;
+        border-radius: 3px;
+        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+        font-size: 0.9em;
+        color: #d73a49;
+        border: 1px solid #e1e4e8;
+      }
+
+      /* 引用块 - 避免内部断页 */
+      .markdown-body blockquote {
+        border-left: 4px solid #dfe2e5;
+        padding: 0.5em 1em;
+        margin: 1em 0;
+        color: #6a737d;
+        background: #f6f8fa;
+        border-radius: 0 6px 6px 0;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .markdown-body blockquote p {
+        margin: 0.5em 0;
+      }
+
+      /* 列表 - 避免内部断页 */
+      .markdown-body ul, .markdown-body ol {
+        padding-left: 2em;
+        margin: 1em 0;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .markdown-body li {
+        margin: 0.4em 0;
+        line-height: 1.6;
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .markdown-body li > ul, .markdown-body li > ol {
+        margin: 0.4em 0;
+      }
+
+      /* 表格 - 避免内部断页 */
+      .markdown-body table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 1.5em 0;
+        font-size: 10.5pt;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      .markdown-body th {
+        background: #f6f8fa;
+        font-weight: 600;
+        text-align: left;
+        border: 1px solid #dfe2e5;
+        padding: 0.75em 1em;
+      }
+      .markdown-body td {
+        border: 1px solid #dfe2e5;
+        padding: 0.6em 1em;
+      }
+      .markdown-body tr:nth-child(even) {
+        background: #f6f8fa;
+      }
+
+      /* 图片 */
+      .markdown-body img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 6px;
+        margin: 1em 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        display: block;
+      }
+
+      /* 水平线 */
+      .markdown-body hr {
+        border: none;
+        border-top: 2px solid #e1e4e8;
+        margin: 2em 0;
+      }
+
+      /* 链接 */
+      .markdown-body a {
+        color: #0366d6;
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.2s;
+      }
+      .markdown-body a:hover {
+        border-bottom-color: #0366d6;
+      }
+
+      /* 数学公式 */
+      .katex-display {
+        margin: 1.5em 0;
+        overflow-x: auto;
+        padding: 0.5em 0;
+      }
+
+      /* 强调和加粗 */
+      .markdown-body strong {
+        font-weight: 600;
+        color: #24292e;
+      }
+      .markdown-body em {
+        font-style: italic;
+      }
+
+      /* 删除线 */
+      .markdown-body del {
+        text-decoration: line-through;
+        color: #6a737d;
+      }
+
+      /* 任务列表 */
+      .markdown-body input[type="checkbox"] {
+        margin-right: 0.5em;
+      }
     `;
     container.appendChild(style);
     document.body.appendChild(container);
 
-    const canvas = await html2canvas(container, { scale: 2 });
+    // 等待样式应用和图片加载
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // 获取所有需要避免分页的元素位置
+    const elements = container.querySelectorAll('h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol');
+    const elementPositions: { top: number; bottom: number; isHeading: boolean }[] = [];
+
+    elements.forEach((el) => {
+      const rect = el.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const relativeTop = rect.top - containerRect.top;
+      const relativeBottom = rect.bottom - containerRect.top;
+      const isHeading = /^H[1-6]$/.test(el.tagName);
+
+      elementPositions.push({
+        top: relativeTop,
+        bottom: relativeBottom,
+        isHeading
+      });
+    });
+
+    const canvas = await html2canvas(container, {
+      scale: 2,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      imageTimeout: 15000,
+      removeContainer: false,
+      onclone: (clonedDoc) => {
+        // 确保克隆的文档也应用了样式
+        const clonedContainer = clonedDoc.body.querySelector('.markdown-body') as HTMLElement;
+        if (clonedContainer) {
+          clonedContainer.style.visibility = 'visible';
+        }
+      }
+    });
     document.body.removeChild(container);
 
-    const imgData = canvas.toDataURL('image/png');
-    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pdf = new jsPDF({
+      orientation: 'p',
+      unit: 'mm',
+      format: 'a4',
+      compress: true
+    });
+
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth - 20;
+
+    // A4纸的有效打印区域（考虑页边距）
+    const margin = 10;
+    const effectiveWidth = pageWidth - 2 * margin;
+    const effectiveHeight = pageHeight - 2 * margin;
+
+    // 计算图片在PDF中的尺寸
+    const imgWidth = effectiveWidth;
     const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-    let heightLeft = imgHeight;
-    let position = 10;
+    // 计算像素到毫米的转换比例
+    const pxToMm = imgHeight / canvas.height;
 
-    pdf.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
+    // 智能分页：计算分页位置，避免在标题后立即分页
+    const pageBreaks: number[] = [0];
+    let currentHeight = 0;
+    const scale = canvas.height / (container.scrollHeight || canvas.height);
 
-    while (heightLeft > 0) {
-      position = heightLeft - imgHeight + 10;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+    while (currentHeight < imgHeight) {
+      let nextBreak = currentHeight + effectiveHeight;
+
+      // 查找最近的标题元素
+      for (let i = 0; i < elementPositions.length; i++) {
+        const pos = elementPositions[i];
+        const posMm = pos.top * pxToMm / scale;
+
+        // 如果标题在当前页底部附近（距离分页点小于30mm）
+        if (pos.isHeading && posMm > currentHeight && posMm < nextBreak && (nextBreak - posMm) < 30) {
+          // 检查标题后的内容是否会被截断
+          if (i + 1 < elementPositions.length) {
+            const nextPos = elementPositions[i + 1];
+            const nextPosMm = nextPos.top * pxToMm / scale;
+
+            // 如果下一个元素在下一页，则提前分页
+            if (nextPosMm > nextBreak) {
+              nextBreak = posMm - 5; // 在标题前5mm分页
+              break;
+            }
+          }
+        }
+      }
+
+      if (nextBreak < imgHeight) {
+        pageBreaks.push(nextBreak);
+      }
+      currentHeight = nextBreak;
+    }
+
+    // 根据计算的分页位置生成PDF页面
+    for (let i = 0; i < pageBreaks.length; i++) {
+      if (i > 0) {
+        pdf.addPage();
+      }
+
+      const startY = pageBreaks[i];
+      const endY = i < pageBreaks.length - 1 ? pageBreaks[i + 1] : imgHeight;
+      const pageContentHeight = endY - startY;
+
+      // 计算源图片的裁剪区域
+      const sourceY = (startY / imgHeight) * canvas.height;
+      const sourceHeight = ((pageContentHeight) / imgHeight) * canvas.height;
+
+      // 创建临时canvas来裁剪当前页的内容
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = Math.ceil(sourceHeight);
+      const ctx = tempCanvas.getContext('2d');
+
+      if (ctx) {
+        // 绘制当前页对应的内容区域
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        ctx.drawImage(
+          canvas,
+          0, sourceY, canvas.width, sourceHeight,
+          0, 0, canvas.width, sourceHeight
+        );
+
+        const pageImgData = tempCanvas.toDataURL('image/png', 1.0);
+        const pageImgHeight = (sourceHeight * imgWidth) / canvas.width;
+
+        pdf.addImage(pageImgData, 'PNG', margin, margin, imgWidth, pageImgHeight);
+      }
     }
 
     const pdfBlob = pdf.output('blob');
