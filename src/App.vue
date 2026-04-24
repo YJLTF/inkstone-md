@@ -1402,6 +1402,13 @@ onMounted(async () => {
       }
     });
 
+    // 监听命令行传递的文件路径事件
+    await listen<string>("open-file-init", async (event) => {
+      if (event.payload) {
+        await openFile(event.payload);
+      }
+    });
+
     document.addEventListener("keydown", (e) => {
       if (e.ctrlKey) {
         if (e.key === "n") { e.preventDefault(); createNewTab(); }

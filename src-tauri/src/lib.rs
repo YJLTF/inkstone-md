@@ -177,6 +177,27 @@ pub fn run() {
             let window = app.get_webview_window("main").unwrap();
             window.set_title("InkStone MD").unwrap();
 
+            // 获取命令行参数，检查是否有 .md 文件需要打开
+            let args: Vec<String> = std::env::args().collect();
+            if args.len() > 1 {
+                let file_path = args[1].clone();
+                // 检查文件是否是 .md 结尾且存在
+                if file_path.to_lowercase().ends_with(".md")
+                    || file_path.to_lowercase().ends_with(".markdown")
+                    || file_path.to_lowercase().ends_with(".txt")
+                {
+                    if std::path::Path::new(&file_path).exists() {
+                        // 延迟发送事件，确保前端已准备好监听
+                        let w = window.clone();
+                        let fp = file_path.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            let _ = w.emit("open-file-init", fp);
+                        });
+                    }
+                }
+            }
+
             let file_menu = Submenu::with_items(
                 app,
                 "文件",

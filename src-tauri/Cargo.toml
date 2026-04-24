@@ -1,9 +1,9 @@
 [package]
 name = "inkstone-md"
-version = "0.1.0"
+version = "0.1.1"
 description = "A lightweight Markdown editor"
-authors = ["you"]
-edition = "2021"
+authors = ["yjltf"]
+edition = "2024"
 
 [lib]
 name = "inkstone_md_lib"
