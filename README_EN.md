@@ -42,7 +42,8 @@ A lightweight and elegant desktop Markdown editor built with Tauri 2 + Vue 3. Ou
 - **Command-line open**:`inkstone-md xxx.md`
 - **Drag & drop**:drop files onto the window to open
 - **30-second auto-save**:guards against accidental close
-- **Export HTML / PDF**:PDF via html2canvas + jsPDF, with heading-aware page breaks and font fallbacks
+- **Export HTML**:fully self-contained single file — KaTeX CSS + highlight.js theme + Mermaid JS + active theme + images (base64) are all inlined. Open offline in any browser.
+- **Export PDF**:WebView system print → `Microsoft Print to PDF`. Text is selectable and searchable, file size is small, layout matches the live preview exactly.
 
 ### Themes & personalization
 
@@ -90,7 +91,7 @@ npm run tauri build        # produce the NSIS installer (.exe)
 After `npm run tauri build` finishes, the installer is at:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.0.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.1.0_x64-setup.exe
 ```
 
 Double-click to install. Windows will register `.md` / `.markdown` / `.txt` associations automatically.
@@ -112,6 +113,11 @@ Pick `InkStone` / `GitHub` / `One Dark` / `Typora` from the toolbar dropdown. Th
 ### Assets panel
 
 Open the second sidebar tab `🖼️ Assets` to see every image referenced by the current document. Each entry supports reveal / rename / move / compress / copy path / copy reference / remove reference.
+
+### Export
+
+- **HTML**:click `📤 HTML` in the toolbar, pick a path. The produced `.html` contains every style, the active theme, all images as base64, and the Mermaid / KaTeX runtime — open it offline in any browser, no network needed.
+- **PDF**:click `📄 PDF` in the toolbar. The app switches to preview mode and calls the system print dialog. Pick `Microsoft Print to PDF` (built in on Win 10 / 11) to save as PDF. A one-time hint banner shows on first use.
 
 ### Table editing
 
@@ -146,7 +152,7 @@ It expands to a multi-level outline based on all `# / ## / ###` headings. Click 
 - **Code highlighting**:highlight.js
 - **Math**:KaTeX
 - **Diagrams**:mermaid
-- **PDF export**:jspdf + html2canvas
+- **UI icons**:`@lucide/vue` (pure SVG, inherits theme color)
 - **Image compression** (server-side):the `image` crate (jpeg / png)
 
 ## Project structure
@@ -189,6 +195,36 @@ inkstone-md/
 
 ## Changelog
 
+### [1.1.0] — optimization pass
+
+A pure optimization release, no breaking changes. Focuses on toolbar/UI polish and HTML/PDF export fidelity. See [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md) for details.
+
+#### 🎨 UI & toolbar
+- **Toolbar is now icon-only**: switched from emoji + Chinese to Lucide SVG icons (`FilePlus` / `FolderOpen` / `Save` / `Bold` / `Italic` / `Heading1` …), uniform size, inherits theme color
+- Buttons have full state coverage: default / hover / active (split / preview mode highlight) / disabled / focus-visible outline; `:active` adds a `scale(0.96)` micro-animation
+- Groups now use spacing + faint separators; logo is text + feather icon
+- **Responsive overflow**: < 1080px collapses the “Lists” group, < 820px also collapses the “Insert” group, both into a `⋯` dropdown with section headers
+- **Tab bar upgrade**: active tab gets a 2px theme-color bottom border + soft shadow; close button only appears on hover; unsaved indicator is a 6px dot instead of the `●` glyph; middle-click closes a tab
+- Global 200ms color transition (theme / dark mode swaps don't flicker); custom 8px rounded scrollbar
+
+#### 📤 Export
+- **HTML export → single self-contained file**: CSS (KaTeX + highlight.js theme + active theme) / Mermaid JS / images (base64) are all inlined into one `.html`. Works fully offline.
+- HTML export uses `captureCurrentTheme` so the result matches the live preview (all 4 themes, light/dark)
+- **PDF export → WebView print + Save as PDF**: `window.print()` opens the system print dialog. Pick `Microsoft Print to PDF` to save. Text is selectable / searchable, file size is small, layout = preview
+- Complete `@media print` rules: hide toolbar / tabs / sidebar / status bar; `@page A4 / margin 15mm`; prevent page-breaks inside headings / code blocks / tables / images; `print-color-adjust: exact` keeps code-block backgrounds
+- First-time PDF click shows a one-time hint banner; remembered via `localStorage`
+- Removed `jspdf` + `html2canvas` dependencies (bundle −~600KB)
+
+#### 🔧 Improved
+- Version bumped to `1.1.0` in all three places
+- New dependency: `@lucide/vue`
+- Export rendering uses the same markdown pipeline as the live preview (image base64 inlining + TOC preprocess + KaTeX + Mermaid placeholder), guaranteeing WYSIWYG
+
+#### ⚠️ Known limitations
+- HTML exports with many images can be large (each base64 image ≈ 1.3× the original). Typical documents stay under 5 MB.
+- Exported HTML without KaTeX font files falls back to system serif for math glyphs. Common symbols render fine; very rare characters may show as boxes.
+- PDF export requires the user to pick `Microsoft Print to PDF` in the system dialog (cannot be 100% automated).
+
 ### [1.0.0] — first stable release
 
 Targets "daily-usable" as the bar. Fixes the two blocking bugs and fills the core experience gap with Typora.
@@ -225,7 +261,7 @@ Earlier development snapshot. Implemented multi-tab, file tree, search & replace
 
 ## Roadmap
 
-Candidates for V1.x and beyond are tracked in [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md), including DOCX export, spell-check, font preferences, and a custom dark palette.
+V1.x candidates are tracked in [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md) (DOCX export, spell-check, font preferences, etc.) and [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md) (detailed record of this optimization pass and remaining follow-ups).
 
 ## Contributing
 
