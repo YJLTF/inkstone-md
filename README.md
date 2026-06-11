@@ -42,7 +42,8 @@
 - **命令行打开**:`inkstone-md xxx.md`
 - **拖拽打开**:把文件拖到窗口即可打开
 - **30 秒自动保存**:避免误关丢失
-- **导出 HTML / PDF**:PDF 走 html2canvas + jsPDF,支持标题保护、表格分页、字体回退
+- **导出 HTML**:**单文件全内联**(KaTeX CSS + highlight.js 主题 + Mermaid JS + 当前主题 + 图片 base64),离线双击即可正常显示
+- **导出 PDF**:走 WebView 系统打印 + `Microsoft Print to PDF`,文字可选可搜索、体积小、样式 = 预览所见即所得
 
 ### 主题与个性化
 
@@ -90,7 +91,7 @@ npm run tauri build        # 打包出 NSIS 安装包(.exe)
 `npm run tauri build` 完成后,安装包位于:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.0.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.1.0_x64-setup.exe
 ```
 
 双击安装即可,Windows 会自动注册 `.md` / `.markdown` / `.txt` 文件关联。
@@ -112,6 +113,11 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.0.0_x64-setup.exe
 ### 资源管理
 
 打开侧边栏第二个标签 `🖼️ 资源`,即可看到当前文档中所有引用的图片。每个条目支持 `在文件夹中显示 / 重命名 / 移动 / 压缩 / 复制路径 / 复制引用 / 移除引用`。
+
+### 导出
+
+- **HTML**:工具栏 `📤 HTML` 按钮,弹出保存对话框,生成的 `.html` 包含完整样式 + 主题 + 所有图片(base64) + Mermaid/KaTeX 依赖,完全离线可用
+- **PDF**:工具栏 `📄 PDF` 按钮,自动切到预览模式后调用系统打印对话框。在打印机下拉里选 `Microsoft Print to PDF`(Win10/11 自带)即可另存为 PDF。首次使用会弹一次性提示
 
 ### 表格编辑
 
@@ -146,7 +152,7 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.0.0_x64-setup.exe
 - **代码高亮**:highlight.js
 - **数学公式**:KaTeX
 - **图表**:mermaid
-- **PDF 导出**:jspdf + html2canvas
+- **UI 图标**:`@lucide/vue`(纯 SVG,随主题变色)
 - **图片处理**(压缩):`image` crate(jpeg / png)
 
 ## 项目结构
@@ -189,6 +195,36 @@ inkstone-md/
 
 ## 版本记录
 
+### [1.1.0] - 优化型迭代
+
+纯优化版本,不引入破坏性改动。集中打磨 UI/工具栏观感与 HTML/PDF 导出保真度,详见 [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)。
+
+#### 🎨 UI / 工具栏
+- **工具栏全面图标化**:从 emoji + 中文升级为 Lucide SVG 图标(`FilePlus` / `FolderOpen` / `Save` / `Bold` / `Italic` / `Heading1` …),统一尺寸,随主题变色
+- 工具栏按钮四态完整:default / hover / active(分栏/预览模式高亮)/ disabled / focus-visible outline;`:active` 加 `scale(0.96)` 微动画
+- 分组改用间距 + 弱化分隔线,降低视觉噪声;Logo 改纯文字 + 羽毛笔图标
+- **响应式溢出**:窗口宽度 < 1080px 时折叠「列表」组,< 820px 时再折叠「插入」组,统一进 `⋯` 下拉菜单(分组标题 + 完整工具)
+- **Tab 栏升级**:激活 tab 加 2px 主题色底部高亮 + 微阴影;hover 才显示关闭按钮;未保存指示用 6px 圆点替代 `●` 字符;支持中键关闭
+- 全局颜色过渡 200ms(主题/暗色切换不抖);自定义 8px 圆角滚动条
+
+#### 📤 导出
+- **HTML 导出 → 单文件全内联**:CSS(KaTeX + highlight.js 主题 + 当前主题)/ Mermaid JS / 图片(base64)全部内联到一个 `.html`,完全离线双击可正常显示
+- HTML 导出走 `captureCurrentTheme` 主题快照,保证所见即所得(亮/暗、4 套主题全部生效)
+- **PDF 导出 → WebView 打印 + Save as PDF**:`window.print()` 调起系统打印对话框,选 `Microsoft Print to PDF` 即可保存为 PDF;输出文字可选可搜索、体积小、样式 = 预览
+- 完整 `@media print` 样式:隐藏工具栏 / Tab / 侧边栏 / 状态栏,只打印预览内容;`@page A4 / margin 15mm`;标题/代码块/表格/图片防分页切断;`print-color-adjust: exact` 保留代码块背景
+- 首次点 PDF 弹一次性提示横幅,告诉用户选哪个打印机;写入 `localStorage` 不再弹
+- 移除 `jspdf` + `html2canvas` 依赖(bundle 体积 -~600KB)
+
+#### 🔧 改进
+- 三处 version 同步到 `1.1.0`
+- `package.json` 新增依赖:`@lucide/vue`
+- 导出渲染走与预览完全相同的 markdown 流水线(图片 base64 内联 + TOC 预处理 + KaTeX + Mermaid 占位),保证 WYSIWYG
+
+#### ⚠️ 已知边界
+- HTML 导出含大量图片时文件较大(每张图 base64 ≈ 原图 1.3 倍),典型文档 < 5MB
+- KaTeX 数学字符在没有 KaTeX 字体文件的导出 HTML 里降级为系统衬线字体,常见数学符号正常,极少冷僻字符会显示为方框
+- 导出 PDF 需用户在系统打印对话框里手动选 `Microsoft Print to PDF` 一步操作(无法 100% 自动化)
+
 ### [1.0.0] - 首发正式版
 
 以"可日常使用"为门槛,集中解决两个阻塞性 BUG,并补齐 Typora 同类核心体验。
@@ -225,7 +261,7 @@ inkstone-md/
 
 ## 路线图
 
-V1.0 之后的候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md),包括 DOCX 导出、拼写检查、字体偏好、自定义深色等。
+V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)与 [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)(本期优化型迭代的详细记录与剩余工作项)。
 
 ## 贡献
 

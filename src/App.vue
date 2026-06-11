@@ -11,8 +11,20 @@ import "highlight.js/styles/github-dark.css";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import katexCss from "katex/dist/katex.min.css?raw";
+import hljsLightCss from "highlight.js/styles/github.css?raw";
+import hljsDarkCss from "highlight.js/styles/github-dark.css?raw";
+import mermaidJs from "mermaid/dist/mermaid.min.js?raw";
+import {
+  FilePlus, FolderOpen, Folder, Save,
+  Heading1, Heading2, Heading3,
+  Bold, Italic, Strikethrough, Code,
+  List, ListOrdered, SquareCheck, Quote,
+  Image, Link, Sigma, Code2, Table, ListTree,
+  FileCode, Printer,
+  Columns2, Eye, PanelLeft, Plus, X,
+  Sun, Moon, MoreHorizontal, Feather,
+} from "@lucide/vue";
 
 interface FileEntry {
   name: string;
@@ -143,6 +155,17 @@ function setTheme(name: ThemeName) {
 const showPreview = ref(false);
 const showSplit = ref(true);
 const typewriterMode = ref(localStorage.getItem('typewriterMode') === 'true');
+
+const toolbarRef = ref<HTMLElement | null>(null);
+const overflowLevel = ref<0 | 1 | 2>(0);
+const overflowMenuOpen = ref(false);
+
+function updateOverflow() {
+  const w = toolbarRef.value?.clientWidth ?? 0;
+  if (w > 0 && w < 820) overflowLevel.value = 2;
+  else if (w > 0 && w < 1080) overflowLevel.value = 1;
+  else overflowLevel.value = 0;
+}
 const workspacePath = ref<string | null>(null);
 const fileTree = ref<FileEntry[]>([]);
 const autoSaveInterval = ref<number | null>(null);
@@ -1834,419 +1857,389 @@ function jumpToHeading(line: number) {
   textarea.setSelectionRange(pos, pos);
 }
 
+// ========= 导出相关(V1.1.0 重做) =========
+
+/**
+ * 截取当前主题快照:导出/打印时用来注入到产物里,保证所见即所得。
+ * 返回:
+ *   - dataTheme: <html data-theme> 的值
+ *   - isDark:    是否暗色
+ *   - fontFamily: 主题对应的字体栈
+ *   - bodyBg/bodyColor: 主题背景/前景色
+ */
+function captureCurrentTheme(): {
+  dataTheme: string;
+  isDark: boolean;
+  fontFamily: string;
+  bodyBg: string;
+  bodyColor: string;
+  highlightCss: string;
+} {
+  const theme = themeName.value;
+  const dark = isDark.value;
+  // 主题对应的字体栈(与 src/style.css 中保持一致)
+  const fontMap: Record<string, string> = {
+    inkstone: `'Segoe UI', system-ui, -apple-system, 'Microsoft YaHei', 'PingFang SC', sans-serif`,
+    github: `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif`,
+    onedark: `'Source Code Pro', 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace`,
+    typora: `'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif`,
+  };
+  // 主题对应的背景/前景(从 style.css 抄出)
+  const colorMap: Record<string, { bg: string; fg: string }> = {
+    inkstone: { bg: dark ? '#1a1a1a' : '#fafafa', fg: dark ? '#e5e5e5' : '#1a1a1a' },
+    github: { bg: dark ? '#0d1117' : '#ffffff', fg: dark ? '#e6edf3' : '#1f2328' },
+    onedark: { bg: '#282c34', fg: '#abb2bf' },
+    typora: { bg: dark ? '#1f1f1f' : '#ffffff', fg: dark ? '#d0d0d0' : '#2c2c2c' },
+  };
+  const c = colorMap[theme] || colorMap.inkstone;
+  return {
+    dataTheme: theme,
+    isDark: dark,
+    fontFamily: fontMap[theme] || fontMap.inkstone,
+    bodyBg: c.bg,
+    bodyColor: c.fg,
+    highlightCss: dark ? hljsDarkCss : hljsLightCss,
+  };
+}
+
+function getMimeFromExt(ext: string): string {
+  const map: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    bmp: "image/bmp",
+    ico: "image/x-icon",
+  };
+  return map[ext.toLowerCase()] || "application/octet-stream";
+}
+
+function bytesToBase64(bytes: number[]): string {
+  const arr = new Uint8Array(bytes);
+  let binary = "";
+  const chunk = 8192;
+  for (let i = 0; i < arr.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(arr.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
+}
+
+async function fetchAsDataUri(url: string): Promise<string | null> {
+  try {
+    const resp = await fetch(url, { mode: "cors" });
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把 markdown 中的本地图片内联为 data URI(base64),网络图片尝试 fetch 内联。
+ * 不可用的图片保持原样。
+ */
+async function inlineImagesInMarkdown(
+  markdown: string,
+  currentFilePath: string | null,
+): Promise<string> {
+  const re = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
+  type Hit = { start: number; end: number; alt: string; src: string };
+  const hits: Hit[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(markdown)) !== null) {
+    hits.push({ start: m.index, end: m.index + m[0].length, alt: m[1], src: m[2] });
+  }
+  if (hits.length === 0) return markdown;
+
+  let out = markdown;
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i];
+    let newSrc = h.src;
+
+    if (/^(data:|blob:)/i.test(h.src)) {
+      continue;
+    } else if (/^https?:/i.test(h.src)) {
+      const inlined = await fetchAsDataUri(h.src);
+      if (inlined) newSrc = inlined;
+    } else {
+      // 本地路径
+      let absPath: string;
+      if (isAbsolutePath(h.src)) {
+        absPath = h.src.replace(/\\/g, "/");
+      } else if (currentFilePath) {
+        const dir = currentFilePath
+          .replace(/\\/g, "/")
+          .split("/")
+          .slice(0, -1)
+          .join("/");
+        absPath = dir + "/" + h.src;
+      } else {
+        continue;
+      }
+      try {
+        const bytes = (await invoke<number[]>("read_file_bytes", { path: absPath })) as number[];
+        const ext = absPath.split(".").pop() || "";
+        newSrc = `data:${getMimeFromExt(ext)};base64,${bytesToBase64(bytes)}`;
+      } catch (e) {
+        console.warn("导出图片内联失败:", absPath, e);
+        continue;
+      }
+    }
+
+    out = out.slice(0, h.start) + `![${h.alt}](${newSrc})` + out.slice(h.end);
+  }
+  return out;
+}
+
+/**
+ * 渲染 markdown 到"可导出" HTML(不带交互包装)。
+ * 流程与 renderedHTML 一致,但跳过 wrapImagesForInteraction / wrapCodeBlocks / wrapTablesForEdit。
+ */
+function renderHTMLForExport(source: string): string {
+  let html = md.render(source);
+  html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
+    try {
+      const cleanTex = tex.trim();
+      return `<div class="katex-display">${katex.renderToString(cleanTex, { throwOnError: false, displayMode: true })}</div>`;
+    } catch {
+      return `<div class="katex-error">${tex}</div>`;
+    }
+  });
+  html = html.replace(/\$([^$\n]+)\$/g, (_, tex) => {
+    try {
+      return katex.renderToString(tex, { throwOnError: false });
+    } catch {
+      return tex;
+    }
+  });
+  html = html.replace(
+    /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
+    (_, code) => {
+      const id = "mermaid-" + Math.random().toString(36).slice(2, 11);
+      const decoded = code
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&")
+        .trim();
+      return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}">${escapeHtml(decoded)}</div>`;
+    },
+  );
+  return html;
+}
+
+const EXPORT_BASE_CSS = `
+:root {
+  font-family: var(--ink-font, 'Segoe UI', system-ui, sans-serif);
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--ink-fg, #1a1a1a);
+  background: var(--ink-bg, #fafafa);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { padding: 2rem 1.5rem; }
+.markdown-body { max-width: 800px; margin: 0 auto; }
+.markdown-body h1 { font-size: 2em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; margin: 1em 0; }
+.markdown-body h2 { font-size: 1.5em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; margin: 1em 0; }
+.markdown-body h3 { font-size: 1.25em; margin: 1em 0; }
+.markdown-body h4 { font-size: 1.1em; margin: 1em 0; }
+.markdown-body h5, .markdown-body h6 { font-size: 1em; margin: 1em 0; }
+.markdown-body p { margin: 0.8em 0; }
+.markdown-body ul, .markdown-body ol { margin: 0.8em 0; padding-left: 2em; }
+.markdown-body li { margin: 0.3em 0; }
+.markdown-body code { background: rgba(127,127,127,0.1); padding: 0.2em 0.4em; border-radius: 3px; font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 0.9em; }
+.markdown-body pre { background: rgba(127,127,127,0.08); padding: 1em; border-radius: 6px; overflow-x: auto; margin: 1em 0; }
+.markdown-body pre code { background: transparent; padding: 0; }
+.markdown-body blockquote { border-left: 4px solid #ddd; padding: 0.4em 1em; color: #666; margin: 1em 0; background: rgba(127,127,127,0.04); border-radius: 0 4px 4px 0; }
+.markdown-body table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+.markdown-body th, .markdown-body td { border: 1px solid #ddd; padding: 0.5em 1em; text-align: left; }
+.markdown-body th { background: rgba(127,127,127,0.06); font-weight: 600; }
+.markdown-body a { color: #0366d6; text-decoration: none; }
+.markdown-body a:hover { text-decoration: underline; }
+.markdown-body hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+.markdown-body img { max-width: 100%; height: auto; margin: 0.8em 0; border-radius: 4px; }
+.markdown-body input[type="checkbox"] { margin-right: 0.5em; }
+.markdown-body .mermaid-diagram { text-align: center; margin: 1em 0; padding: 0.5em; background: rgba(127,127,127,0.04); border-radius: 6px; }
+.markdown-body .mermaid-diagram svg { max-width: 100%; height: auto; }
+.markdown-body .mermaid-error { color: #b91c1c; font-size: 0.9em; padding: 0.5em; }
+.katex-display { margin: 1em 0; overflow-x: auto; }
+
+/* GitHub 主题(light/dark) */
+[data-theme="github"] { color: #1f2328; background: #ffffff; }
+[data-theme="github"].dark, .dark[data-theme="github"], html[data-theme="github"].dark { color: #e6edf3; background: #0d1117; }
+[data-theme="github"] .markdown-body h1, [data-theme="github"] .markdown-body h2 { border-bottom-color: #d1d9e0; }
+[data-theme="github"].dark .markdown-body h1, [data-theme="github"].dark .markdown-body h2 { border-bottom-color: #3d444d; }
+[data-theme="github"] .markdown-body code { background: #eff1f3; color: #1f2328; }
+[data-theme="github"].dark .markdown-body code { background: #161b22; color: #e6edf3; }
+[data-theme="github"] .markdown-body pre { background: #f6f8fa; }
+[data-theme="github"].dark .markdown-body pre { background: #161b22; }
+[data-theme="github"] .markdown-body blockquote { border-left-color: #d1d9e0; color: #59636e; background: #f6f8fa; }
+[data-theme="github"].dark .markdown-body blockquote { border-left-color: #3d444d; color: #9198a1; background: #161b22; }
+[data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body tr:nth-child(even) { background: #f6f8fa; }
+[data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body tr:nth-child(even) { background: #161b22; }
+[data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body td { border-color: #d1d9e0; }
+[data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body td { border-color: #3d444d; }
+[data-theme="github"] .markdown-body a { color: #0969da; }
+[data-theme="github"].dark .markdown-body a { color: #58a6ff; }
+[data-theme="github"] .markdown-body hr { border-top-color: #d1d9e0; }
+[data-theme="github"].dark .markdown-body hr { border-top-color: #3d444d; }
+
+/* One Dark 主题(强制 dark) */
+[data-theme="onedark"] { color: #abb2bf; background: #282c34; font-family: 'Source Code Pro', 'Cascadia Code', 'Fira Code', Consolas, monospace; }
+[data-theme="onedark"] .markdown-body h1, [data-theme="onedark"] .markdown-body h2 { border-bottom-color: #3e4452; color: #e5c07b; }
+[data-theme="onedark"] .markdown-body h3, [data-theme="onedark"] .markdown-body h4, [data-theme="onedark"] .markdown-body h5, [data-theme="onedark"] .markdown-body h6 { color: #e5c07b; }
+[data-theme="onedark"] .markdown-body code { background: #3e4452; color: #e06c75; }
+[data-theme="onedark"] .markdown-body pre { background: #21252b; color: #abb2bf; }
+[data-theme="onedark"] .markdown-body pre code { color: #abb2bf; }
+[data-theme="onedark"] .markdown-body blockquote { border-left-color: #3e4452; color: #7f848e; background: rgba(255,255,255,0.02); }
+[data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body tr:nth-child(even) { background: #21252b; }
+[data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body td { border-color: #3e4452; }
+[data-theme="onedark"] .markdown-body a { color: #61afef; }
+[data-theme="onedark"] .markdown-body hr { border-top-color: #3e4452; }
+
+/* Typora 主题 */
+[data-theme="typora"] { color: #2c2c2c; background: #ffffff; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif; }
+[data-theme="typora"].dark { color: #d0d0d0; background: #1f1f1f; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif; }
+[data-theme="typora"] .markdown-body { max-width: 760px; font-size: 1.05rem; line-height: 1.75; }
+[data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2, [data-theme="typora"] .markdown-body h3, [data-theme="typora"] .markdown-body h4, [data-theme="typora"] .markdown-body h5, [data-theme="typora"] .markdown-body h6 { font-family: inherit; color: #1a1a1a; }
+[data-theme="typora"].dark .markdown-body h1, [data-theme="typora"].dark .markdown-body h2, [data-theme="typora"].dark .markdown-body h3, [data-theme="typora"].dark .markdown-body h4, [data-theme="typora"].dark .markdown-body h5, [data-theme="typora"].dark .markdown-body h6 { color: #f0f0f0; }
+[data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2 { border-bottom: 1px solid #ececec; }
+[data-theme="typora"].dark .markdown-body h1, [data-theme="typora"].dark .markdown-body h2 { border-bottom-color: #2c2c2c; }
+[data-theme="typora"] .markdown-body code { background: #f4f0ec; color: #b3594a; font-family: 'JetBrains Mono', 'Cascadia Code', monospace; }
+[data-theme="typora"].dark .markdown-body code { background: #2a2a2a; color: #e8a292; }
+[data-theme="typora"] .markdown-body pre { background: #faf8f5; border: 1px solid #ececec; }
+[data-theme="typora"].dark .markdown-body pre { background: #252525; border-color: #2c2c2c; }
+[data-theme="typora"] .markdown-body blockquote { border-left-color: #c9c2b8; color: #777; font-style: italic; background: transparent; }
+[data-theme="typora"].dark .markdown-body blockquote { border-left-color: #444; color: #999; }
+[data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body tr:nth-child(even) { background: #f4f0ec; }
+[data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body tr:nth-child(even) { background: #2a2a2a; }
+[data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body td { border-color: #ececec; }
+[data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body td { border-color: #2c2c2c; }
+[data-theme="typora"] .markdown-body a { color: #3b82f6; }
+[data-theme="typora"].dark .markdown-body a { color: #60a5fa; }
+[data-theme="typora"] .markdown-body hr { border-top-color: #ececec; }
+[data-theme="typora"].dark .markdown-body hr { border-top-color: #2c2c2c; }
+`;
+
+const PRINT_CSS = `
+@page { size: A4; margin: 15mm; }
+@media print {
+  body { background: white !important; color: black !important; padding: 0 !important; }
+  .toolbar, .tab-bar, .sidebar, .search-panel, .empty-state, .status-bar, .toolbar-tabs, .tab-icon-btn, .tab-item { display: none !important; }
+  .preview-area, .editor-area { border: none !important; padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+  .markdown-body { max-width: 100% !important; }
+  .ink-image-toolbar, .ink-codeblock-toolbar, .ink-table-toolbar, .mermaid-diagram[data-code] { display: none !important; }
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  h1, h2, h3, h4, h5, h6 { page-break-after: avoid; break-after: avoid; }
+  pre, blockquote, table, img, figure { page-break-inside: avoid; break-inside: avoid; }
+  p, li { orphans: 3; widows: 3; }
+  a { color: inherit !important; text-decoration: none !important; }
+  a[href]::after { content: "" !important; }
+}
+`;
+
+/**
+ * 导出 HTML:单文件全内联,完全离线可打开。
+ */
 async function exportHTML() {
   if (!activeTab.value) return;
+  const tab = activeTab.value;
   try {
     const path = await save({
       filters: [{ name: "HTML", extensions: ["html"] }],
-      defaultPath: activeTab.value.name.replace(/\.[^.]+$/, '.html'),
+      defaultPath: tab.name.replace(/\.[^.]+$/, ".html"),
     });
-    if (path) {
-      const htmlContent = `<!DOCTYPE html>
-<html lang="zh-CN">
+    if (!path) return;
+
+    const theme = captureCurrentTheme();
+    const withInlinedImages = await inlineImagesInMarkdown(tab.content, tab.path);
+    const withToc = preprocessToc(withInlinedImages, headings.value);
+    const body = renderHTMLForExport(withToc);
+    const title = tab.name.replace(/\.[^.]+$/, "");
+
+    const htmlContent = `<!DOCTYPE html>
+<html lang="zh-CN" data-theme="${theme.dataTheme}"${theme.isDark ? ' class="dark"' : ""}>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${activeTab.value.name.replace(/\.[^.]+$/, '')}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
-  <style>
-    body { max-width: 800px; margin: 0 auto; padding: 2rem; font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; }
-    pre { background: #f5f5f5; padding: 1em; border-radius: 6px; overflow-x: auto; }
-    code { background: #f5f5f5; padding: 0.2em 0.4em; border-radius: 3px; }
-    blockquote { border-left: 4px solid #ddd; padding-left: 1em; color: #666; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ddd; padding: 0.5em 1em; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${escapeHtml(title)}</title>
+<style>
+:root {
+  --ink-font: ${theme.fontFamily};
+  --ink-bg: ${theme.bodyBg};
+  --ink-fg: ${theme.bodyColor};
+}
+${EXPORT_BASE_CSS}
+${theme.highlightCss}
+${katexCss}
+${PRINT_CSS}
+</style>
 </head>
 <body>
-${renderedHTML.value}
+<div class="markdown-body">${body}</div>
+<script>
+${mermaidJs}
+(function() {
+  if (typeof mermaid === 'undefined') return;
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: ${theme.isDark ? "'dark'" : "'default'"},
+      securityLevel: 'loose',
+      fontFamily: 'inherit'
+    });
+    document.querySelectorAll('.mermaid-diagram[data-code]').forEach(function(el, i) {
+      var code = decodeURIComponent(el.getAttribute('data-code') || '');
+      if (!code) return;
+      var id = 'm-' + Date.now() + '-' + i;
+      mermaid.render(id, code).then(function(r) {
+        el.innerHTML = r.svg;
+      }).catch(function(e) {
+        el.innerHTML = '<pre class="mermaid-error">Mermaid 渲染失败: ' + (e.message || e) + '</pre>';
+      });
+    });
+  } catch (e) {
+    console.error('Mermaid init failed:', e);
+  }
+})();
+</` + `script>
 </body>
 </html>`;
-      await invoke("write_file", { path, content: htmlContent });
-    }
+    await invoke("write_file", { path, content: htmlContent });
   } catch (err) {
     console.error("导出HTML失败:", err);
   }
 }
 
+const showPrintHint = ref(localStorage.getItem("pdfHintShown") === "true");
 async function exportPDF() {
   if (!activeTab.value) return;
+  showPrintHint.value = false;
+  localStorage.setItem("pdfHintShown", "true");
+  // 切到预览模式,等一帧让 mermaid/KaTeX 渲染好,再触发系统打印
+  showSplit.value = false;
+  showPreview.value = true;
+  await nextTick();
+  await new Promise((r) => setTimeout(r, 150));
   try {
-    const path = await save({
-      filters: [{ name: "PDF", extensions: ["pdf"] }],
-      defaultPath: activeTab.value.name.replace(/\.[^.]+$/, '.pdf'),
-    });
-    if (!path) return;
-
-    // 创建临时容器渲染内容
-    const container = document.createElement('div');
-    container.className = 'markdown-body';
-    container.style.width = '210mm';
-    container.style.padding = '25mm 20mm 30mm 20mm';
-    container.style.background = 'white';
-    container.style.fontFamily = "'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif";
-    container.style.fontSize = '11pt';
-    container.style.lineHeight = '1.8';
-    container.style.color = '#2c3e50';
-    container.style.boxSizing = 'border-box';
-    container.innerHTML = renderedHTML.value;
-
-    // 添加专业的Markdown样式（包含分页控制）
-    const style = document.createElement('style');
-    style.textContent = `
-      .markdown-body {
-        text-rendering: optimizeLegibility;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-      }
-
-      /* 标题样式 - 避免分页 */
-      .markdown-body h1 {
-        font-size: 24pt;
-        font-weight: 700;
-        margin: 0.8em 0 0.4em 0;
-        padding-bottom: 0.3em;
-        border-bottom: 2px solid #e1e4e8;
-        color: #1a1a1a;
-        line-height: 1.3;
-        page-break-after: avoid;
-        break-after: avoid;
-      }
-      .markdown-body h2 {
-        font-size: 18pt;
-        font-weight: 600;
-        margin: 0.8em 0 0.4em 0;
-        padding-bottom: 0.25em;
-        border-bottom: 1px solid #e1e4e8;
-        color: #24292e;
-        line-height: 1.4;
-        page-break-after: avoid;
-        break-after: avoid;
-      }
-      .markdown-body h3 {
-        font-size: 14pt;
-        font-weight: 600;
-        margin: 0.8em 0 0.4em 0;
-        color: #24292e;
-        line-height: 1.4;
-        page-break-after: avoid;
-        break-after: avoid;
-      }
-      .markdown-body h4 {
-        font-size: 12pt;
-        font-weight: 600;
-        margin: 0.8em 0 0.3em 0;
-        color: #24292e;
-        page-break-after: avoid;
-        break-after: avoid;
-      }
-      .markdown-body h5, .markdown-body h6 {
-        font-size: 11pt;
-        font-weight: 600;
-        margin: 0.8em 0 0.3em 0;
-        color: #586069;
-        page-break-after: avoid;
-        break-after: avoid;
-      }
-
-      /* 段落和文本 - 避免内部断页 */
-      .markdown-body p {
-        margin: 0.8em 0;
-        text-align: justify;
-        orphans: 3;
-        widows: 3;
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-
-      /* 代码块 - 避免内部断页 */
-      .markdown-body pre {
-        background: #f6f8fa;
-        border: 1px solid #e1e4e8;
-        border-radius: 6px;
-        padding: 1em;
-        overflow-x: auto;
-        margin: 1em 0;
-        font-size: 10pt;
-        line-height: 1.5;
-        box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-      .markdown-body pre code {
-        background: transparent;
-        padding: 0;
-        border-radius: 0;
-        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-      }
-
-      /* 行内代码 */
-      .markdown-body code {
-        background: #f6f8fa;
-        padding: 0.2em 0.4em;
-        border-radius: 3px;
-        font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-        font-size: 0.9em;
-        color: #d73a49;
-        border: 1px solid #e1e4e8;
-      }
-
-      /* 引用块 - 避免内部断页 */
-      .markdown-body blockquote {
-        border-left: 4px solid #dfe2e5;
-        padding: 0.5em 1em;
-        margin: 1em 0;
-        color: #6a737d;
-        background: #f6f8fa;
-        border-radius: 0 6px 6px 0;
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-      .markdown-body blockquote p {
-        margin: 0.5em 0;
-      }
-
-      /* 列表 - 避免内部断页 */
-      .markdown-body ul, .markdown-body ol {
-        padding-left: 2em;
-        margin: 1em 0;
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-      .markdown-body li {
-        margin: 0.4em 0;
-        line-height: 1.6;
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-      .markdown-body li > ul, .markdown-body li > ol {
-        margin: 0.4em 0;
-      }
-
-      /* 表格 - 避免内部断页 */
-      .markdown-body table {
-        border-collapse: collapse;
-        width: 100%;
-        margin: 1.5em 0;
-        font-size: 10.5pt;
-        overflow: hidden;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        page-break-inside: avoid;
-        break-inside: avoid;
-      }
-      .markdown-body th {
-        background: #f6f8fa;
-        font-weight: 600;
-        text-align: left;
-        border: 1px solid #dfe2e5;
-        padding: 0.75em 1em;
-      }
-      .markdown-body td {
-        border: 1px solid #dfe2e5;
-        padding: 0.6em 1em;
-      }
-      .markdown-body tr:nth-child(even) {
-        background: #f6f8fa;
-      }
-
-      /* 图片 */
-      .markdown-body img {
-        max-width: 100%;
-        height: auto;
-        border-radius: 6px;
-        margin: 1em 0;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        display: block;
-      }
-
-      /* 水平线 */
-      .markdown-body hr {
-        border: none;
-        border-top: 2px solid #e1e4e8;
-        margin: 2em 0;
-      }
-
-      /* 链接 */
-      .markdown-body a {
-        color: #0366d6;
-        text-decoration: none;
-        border-bottom: 1px solid transparent;
-        transition: border-color 0.2s;
-      }
-      .markdown-body a:hover {
-        border-bottom-color: #0366d6;
-      }
-
-      /* 数学公式 */
-      .katex-display {
-        margin: 1.5em 0;
-        overflow-x: auto;
-        padding: 0.5em 0;
-      }
-
-      /* 强调和加粗 */
-      .markdown-body strong {
-        font-weight: 600;
-        color: #24292e;
-      }
-      .markdown-body em {
-        font-style: italic;
-      }
-
-      /* 删除线 */
-      .markdown-body del {
-        text-decoration: line-through;
-        color: #6a737d;
-      }
-
-      /* 任务列表 */
-      .markdown-body input[type="checkbox"] {
-        margin-right: 0.5em;
-      }
-    `;
-    container.appendChild(style);
-    document.body.appendChild(container);
-
-    // 等待样式应用和图片加载
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // 获取所有需要避免分页的元素位置
-    const elements = container.querySelectorAll('h1, h2, h3, h4, h5, h6, p, pre, blockquote, table, ul, ol');
-    const elementPositions: { top: number; bottom: number; isHeading: boolean }[] = [];
-
-    elements.forEach((el) => {
-      const rect = el.getBoundingClientRect();
-      const containerRect = container.getBoundingClientRect();
-      const relativeTop = rect.top - containerRect.top;
-      const relativeBottom = rect.bottom - containerRect.top;
-      const isHeading = /^H[1-6]$/.test(el.tagName);
-
-      elementPositions.push({
-        top: relativeTop,
-        bottom: relativeBottom,
-        isHeading
-      });
-    });
-
-    const canvas = await html2canvas(container, {
-      scale: 2,
-      useCORS: true,
-      allowTaint: true,
-      backgroundColor: '#ffffff',
-      logging: false,
-      imageTimeout: 15000,
-      removeContainer: false,
-      onclone: (clonedDoc) => {
-        // 确保克隆的文档也应用了样式
-        const clonedContainer = clonedDoc.body.querySelector('.markdown-body') as HTMLElement;
-        if (clonedContainer) {
-          clonedContainer.style.visibility = 'visible';
-        }
-      }
-    });
-    document.body.removeChild(container);
-
-    const pdf = new jsPDF({
-      orientation: 'p',
-      unit: 'mm',
-      format: 'a4',
-      compress: true
-    });
-
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-
-    // A4纸的有效打印区域（考虑页边距）
-    const margin = 10;
-    const effectiveWidth = pageWidth - 2 * margin;
-    const effectiveHeight = pageHeight - 2 * margin;
-
-    // 计算图片在PDF中的尺寸
-    const imgWidth = effectiveWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    // 计算像素到毫米的转换比例
-    const pxToMm = imgHeight / canvas.height;
-
-    // 智能分页：计算分页位置，避免在标题后立即分页
-    const pageBreaks: number[] = [0];
-    let currentHeight = 0;
-    const scale = canvas.height / (container.scrollHeight || canvas.height);
-
-    while (currentHeight < imgHeight) {
-      let nextBreak = currentHeight + effectiveHeight;
-
-      // 查找最近的标题元素
-      for (let i = 0; i < elementPositions.length; i++) {
-        const pos = elementPositions[i];
-        const posMm = pos.top * pxToMm / scale;
-
-        // 如果标题在当前页底部附近（距离分页点小于30mm）
-        if (pos.isHeading && posMm > currentHeight && posMm < nextBreak && (nextBreak - posMm) < 30) {
-          // 检查标题后的内容是否会被截断
-          if (i + 1 < elementPositions.length) {
-            const nextPos = elementPositions[i + 1];
-            const nextPosMm = nextPos.top * pxToMm / scale;
-
-            // 如果下一个元素在下一页，则提前分页
-            if (nextPosMm > nextBreak) {
-              nextBreak = posMm - 5; // 在标题前5mm分页
-              break;
-            }
-          }
-        }
-      }
-
-      if (nextBreak < imgHeight) {
-        pageBreaks.push(nextBreak);
-      }
-      currentHeight = nextBreak;
-    }
-
-    // 根据计算的分页位置生成PDF页面
-    for (let i = 0; i < pageBreaks.length; i++) {
-      if (i > 0) {
-        pdf.addPage();
-      }
-
-      const startY = pageBreaks[i];
-      const endY = i < pageBreaks.length - 1 ? pageBreaks[i + 1] : imgHeight;
-      const pageContentHeight = endY - startY;
-
-      // 计算源图片的裁剪区域
-      const sourceY = (startY / imgHeight) * canvas.height;
-      const sourceHeight = ((pageContentHeight) / imgHeight) * canvas.height;
-
-      // 创建临时canvas来裁剪当前页的内容
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = Math.ceil(sourceHeight);
-      const ctx = tempCanvas.getContext('2d');
-
-      if (ctx) {
-        // 绘制当前页对应的内容区域
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-        ctx.drawImage(
-          canvas,
-          0, sourceY, canvas.width, sourceHeight,
-          0, 0, canvas.width, sourceHeight
-        );
-
-        const pageImgData = tempCanvas.toDataURL('image/png', 1.0);
-        const pageImgHeight = (sourceHeight * imgWidth) / canvas.width;
-
-        pdf.addImage(pageImgData, 'PNG', margin, margin, imgWidth, pageImgHeight);
-      }
-    }
-
-    const pdfBlob = pdf.output('blob');
-    const arrayBuffer = await pdfBlob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
-    await invoke("write_file_bytes", { path, content: Array.from(uint8Array) });
-  } catch (err) {
-    console.error("导出PDF失败:", err);
+    window.print();
+  } catch (e) {
+    console.error("打印失败:", e);
   }
+}
+
+function dismissPrintHint() {
+  showPrintHint.value = false;
+  localStorage.setItem("pdfHintShown", "true");
 }
 
 function toggleSidebar() {
@@ -2524,9 +2517,17 @@ onMounted(async () => {
   // 加载最近文件
   loadRecentFiles();
 
-  // 全局点击隐藏右键菜单
+  // 工具栏溢出监听
+  if (toolbarRef.value) {
+    updateOverflow();
+    const ro = new ResizeObserver(() => updateOverflow());
+    ro.observe(toolbarRef.value);
+  }
+
+  // 全局点击隐藏右键菜单/溢出菜单
   document.addEventListener('click', () => {
     hideContextMenu();
+    overflowMenuOpen.value = false;
   });
 
   autoSaveInterval.value = window.setInterval(() => {
@@ -2664,95 +2665,211 @@ onUnmounted(() => {
     </div>
 
     <!-- Toolbar -->
-    <div class="flex items-center gap-1 px-3 py-2 border-b bg-white dark:bg-gray-900 dark:border-gray-700 flex-wrap">
-      <span class="font-semibold text-gray-700 dark:text-gray-200 mr-3">📝 InkStone</span>
-
-      <div class="flex items-center gap-1 border-r border-gray-300 dark:border-gray-600 pr-2 mr-2">
-        <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">文件</span>
-        <button @click="createNewTab()" title="新建 (Ctrl+N)" class="toolbar-btn">📄 新建</button>
-        <button @click="openFile()" title="打开 (Ctrl+O)" class="toolbar-btn">📂 打开</button>
-        <button @click="openFolder" title="打开文件夹" class="toolbar-btn">📁 文件夹</button>
-        <button @click="saveFile()" title="保存 (Ctrl+S)" class="toolbar-btn">💾 保存</button>
+    <div ref="toolbarRef" class="toolbar flex items-center gap-1 px-2 py-1.5 border-b bg-white dark:bg-gray-900 dark:border-gray-700">
+      <div class="toolbar-brand flex items-center gap-1.5 pr-2 mr-1 select-none">
+        <Feather :size="16" class="text-blue-500" />
+        <span class="font-semibold text-sm text-gray-700 dark:text-gray-200">InkStone</span>
       </div>
 
-      <div class="flex items-center gap-1 border-r border-gray-300 dark:border-gray-600 pr-2 mr-2">
-        <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">标题</span>
-        <button @click="insertHeading(1)" title="一级标题" class="toolbar-btn text-sm font-bold">H1</button>
-        <button @click="insertHeading(2)" title="二级标题" class="toolbar-btn text-sm font-bold">H2</button>
-        <button @click="insertHeading(3)" title="三级标题" class="toolbar-btn text-sm font-bold">H3</button>
+      <div class="toolbar-group">
+        <button @click="createNewTab()" title="新建 (Ctrl+N)" class="toolbar-btn">
+          <FilePlus :size="16" /><span class="toolbar-label">新建</span>
+        </button>
+        <button @click="openFile()" title="打开 (Ctrl+O)" class="toolbar-btn">
+          <FolderOpen :size="16" /><span class="toolbar-label">打开</span>
+        </button>
+        <button @click="openFolder" title="打开文件夹" class="toolbar-btn">
+          <Folder :size="16" /><span class="toolbar-label">文件夹</span>
+        </button>
+        <button @click="saveFile()" title="保存 (Ctrl+S)" class="toolbar-btn">
+          <Save :size="16" /><span class="toolbar-label">保存</span>
+        </button>
       </div>
 
-      <div class="flex items-center gap-1 border-r border-gray-300 dark:border-gray-600 pr-2 mr-2">
-        <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">格式</span>
-        <button @click="insertFormat('**')" title="粗体" class="toolbar-btn font-bold">B</button>
-        <button @click="insertFormat('*')" title="斜体" class="toolbar-btn italic">I</button>
-        <button @click="insertFormat('~~')" title="删除线" class="toolbar-btn line-through">S</button>
-        <button @click="insertFormat('`')" title="行内代码" class="toolbar-btn font-mono">`</button>
+      <div class="toolbar-group">
+        <button @click="insertHeading(1)" title="一级标题" class="toolbar-btn">
+          <Heading1 :size="16" />
+        </button>
+        <button @click="insertHeading(2)" title="二级标题" class="toolbar-btn">
+          <Heading2 :size="16" />
+        </button>
+        <button @click="insertHeading(3)" title="三级标题" class="toolbar-btn">
+          <Heading3 :size="16" />
+        </button>
       </div>
 
-      <div class="flex items-center gap-1 border-r border-gray-300 dark:border-gray-600 pr-2 mr-2">
-        <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">列表</span>
-        <button @click="insertText('- ')" title="无序列表" class="toolbar-btn">•</button>
-        <button @click="insertText('1. ')" title="有序列表" class="toolbar-btn">1.</button>
-        <button @click="insertText('- [ ] ')" title="任务列表" class="toolbar-btn">☐</button>
-        <button @click="insertText('> ')" title="引用" class="toolbar-btn">"</button>
+      <div class="toolbar-group">
+        <button @click="insertFormat('**')" title="粗体" class="toolbar-btn">
+          <Bold :size="16" />
+        </button>
+        <button @click="insertFormat('*')" title="斜体" class="toolbar-btn">
+          <Italic :size="16" />
+        </button>
+        <button @click="insertFormat('~~')" title="删除线" class="toolbar-btn">
+          <Strikethrough :size="16" />
+        </button>
+        <button @click="insertFormat('`')" title="行内代码" class="toolbar-btn">
+          <Code :size="16" />
+        </button>
       </div>
 
-      <div class="flex items-center gap-1 border-r border-gray-300 dark:border-gray-600 pr-2 mr-2">
-        <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">插入</span>
-        <button @click="insertImage" title="插入图片" class="toolbar-btn">🖼️ 图片</button>
-        <button @click="insertText('[链接](url)')" title="链接" class="toolbar-btn">🔗</button>
-        <button @click="insertText('$$')" title="数学公式" class="toolbar-btn">∑ 公式</button>
-        <button @click="insertText('```\n\n```')" title="代码块" class="toolbar-btn font-mono">&lt;/&gt; 代码</button>
-        <button @click="insertText('| 表头 | 表头 |\n|------|------|\n| 单元格 | 单元格 |')" title="表格" class="toolbar-btn">⊞</button>
-        <button @click="insertText('\n[[toc]]\n')" title="插入目录(在当前位置生成基于标题的目录)" class="toolbar-btn">📑 目录</button>
+      <div v-show="overflowLevel < 1" class="toolbar-group">
+        <button @click="insertText('- ')" title="无序列表" class="toolbar-btn">
+          <List :size="16" />
+        </button>
+        <button @click="insertText('1. ')" title="有序列表" class="toolbar-btn">
+          <ListOrdered :size="16" />
+        </button>
+        <button @click="insertText('- [ ] ')" title="任务列表" class="toolbar-btn">
+          <SquareCheck :size="16" />
+        </button>
+        <button @click="insertText('> ')" title="引用" class="toolbar-btn">
+          <Quote :size="16" />
+        </button>
+      </div>
+
+      <div v-show="overflowLevel < 2" class="toolbar-group">
+        <button @click="insertImage" title="插入图片" class="toolbar-btn">
+          <Image :size="16" />
+        </button>
+        <button @click="insertText('[链接](url)')" title="链接" class="toolbar-btn">
+          <Link :size="16" />
+        </button>
+        <button @click="insertText('$$')" title="数学公式" class="toolbar-btn">
+          <Sigma :size="16" />
+        </button>
+        <button @click="insertText('```\n\n```')" title="代码块" class="toolbar-btn">
+          <Code2 :size="16" />
+        </button>
+        <button @click="insertText('| 表头 | 表头 |\n|------|------|\n| 单元格 | 单元格 |')" title="表格" class="toolbar-btn">
+          <Table :size="16" />
+        </button>
+        <button @click="insertText('\n[[toc]]\n')" title="插入目录" class="toolbar-btn">
+          <ListTree :size="16" />
+        </button>
+      </div>
+
+      <div v-if="overflowLevel > 0" class="toolbar-group relative" @click.stop>
+        <button
+          @click="overflowMenuOpen = !overflowMenuOpen"
+          title="更多工具"
+          class="toolbar-btn"
+          :class="{ active: overflowMenuOpen }"
+        >
+          <MoreHorizontal :size="16" />
+        </button>
+        <div
+          v-if="overflowMenuOpen"
+          class="overflow-menu absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-1 z-50 min-w-[180px]"
+        >
+          <template v-if="overflowLevel >= 1">
+            <div class="overflow-menu-title">列表</div>
+            <button @click="insertText('- ')" class="overflow-menu-item">
+              <List :size="14" /><span>无序列表</span>
+            </button>
+            <button @click="insertText('1. ')" class="overflow-menu-item">
+              <ListOrdered :size="14" /><span>有序列表</span>
+            </button>
+            <button @click="insertText('- [ ] ')" class="overflow-menu-item">
+              <SquareCheck :size="14" /><span>任务列表</span>
+            </button>
+            <button @click="insertText('> ')" class="overflow-menu-item">
+              <Quote :size="14" /><span>引用</span>
+            </button>
+          </template>
+          <template v-if="overflowLevel >= 2">
+            <div class="overflow-menu-divider"></div>
+            <div class="overflow-menu-title">插入</div>
+            <button @click="insertImage" class="overflow-menu-item">
+              <Image :size="14" /><span>图片</span>
+            </button>
+            <button @click="insertText('[链接](url)')" class="overflow-menu-item">
+              <Link :size="14" /><span>链接</span>
+            </button>
+            <button @click="insertText('$$')" class="overflow-menu-item">
+              <Sigma :size="14" /><span>数学公式</span>
+            </button>
+            <button @click="insertText('```\n\n```')" class="overflow-menu-item">
+              <Code2 :size="14" /><span>代码块</span>
+            </button>
+            <button @click="insertText('| 表头 | 表头 |\n|------|------|\n| 单元格 | 单元格 |')" class="overflow-menu-item">
+              <Table :size="14" /><span>表格</span>
+            </button>
+            <button @click="insertText('\n[[toc]]\n')" class="overflow-menu-item">
+              <ListTree :size="14" /><span>目录</span>
+            </button>
+          </template>
+        </div>
       </div>
 
       <div class="flex-1"></div>
 
-      <div class="flex items-center gap-1 border-l border-gray-300 dark:border-gray-600 pl-2 mr-2">
-        <span class="text-xs text-gray-400 dark:text-gray-500 mr-1">导出</span>
-        <button @click="exportHTML" title="导出HTML" class="toolbar-btn">📤 HTML</button>
-        <button @click="exportPDF" title="导出PDF" class="toolbar-btn">📄 PDF</button>
+      <div class="toolbar-group">
+        <button @click="exportHTML" title="导出 HTML" class="toolbar-btn">
+          <FileCode :size="16" /><span class="toolbar-label">HTML</span>
+        </button>
+        <button @click="exportPDF" title="导出 PDF(系统打印)" class="toolbar-btn">
+          <Printer :size="16" /><span class="toolbar-label">PDF</span>
+        </button>
       </div>
 
-      <button
-        @click="showSplit = true; showPreview = false"
-        class="px-3 py-1 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
-        :class="{ 'bg-gray-200 dark:bg-gray-700': showSplit }"
-      >
-        分栏
-      </button>
-      <button
-        @click="showPreview = true; showSplit = false"
-        class="px-3 py-1 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
-        :class="{ 'bg-gray-200 dark:bg-gray-700': showPreview }"
-      >
-        预览
-      </button>
-      <select
-        :value="themeName"
-        @change="(e: any) => setTheme(e.target.value)"
-        class="px-2 py-1 text-sm rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 cursor-pointer"
-        title="切换主题"
-      >
-        <option v-for="opt in THEME_OPTIONS" :key="opt.value" :value="opt.value">
-          {{ opt.label }}
-        </option>
-      </select>
-      <button
-        @click="toggleDark"
-        class="px-3 py-1 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
-        :title="isDark ? '切换到浅色' : '切换到深色'"
-      >
-        {{ isDark ? '☀️' : '🌙' }}
+      <div class="toolbar-group">
+        <button
+          @click="showSplit = true; showPreview = false"
+          class="toolbar-btn"
+          :class="{ active: showSplit }"
+          title="分栏视图"
+        >
+          <Columns2 :size="16" />
+        </button>
+        <button
+          @click="showPreview = true; showSplit = false"
+          class="toolbar-btn"
+          :class="{ active: showPreview }"
+          title="预览视图"
+        >
+          <Eye :size="16" />
+        </button>
+      </div>
+
+      <div class="toolbar-group">
+        <select
+          :value="themeName"
+          @change="(e: any) => setTheme(e.target.value)"
+          class="toolbar-select"
+          title="切换主题"
+        >
+          <option v-for="opt in THEME_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
+        </select>
+        <button
+          @click="toggleDark"
+          class="toolbar-btn"
+          :title="isDark ? '切换到浅色' : '切换到深色'"
+        >
+          <Sun v-if="isDark" :size="16" class="theme-toggle-icon" />
+          <Moon v-else :size="16" class="theme-toggle-icon" />
+        </button>
+      </div>
+    </div>
+
+    <!-- PDF 打印提示(首次使用弹一次,后写入 localStorage 不再弹) -->
+    <div v-if="showPrintHint" class="print-hint" role="alert">
+      <Printer :size="18" class="print-hint-icon" />
+      <div class="print-hint-body flex-1">
+        <strong>PDF 导出说明</strong>
+        系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>(Win10/11 自带)即可另存为 PDF。文字可选可搜索,样式与预览完全一致。
+      </div>
+      <button @click="dismissPrintHint" class="print-hint-close" title="知道了">
+        <X :size="14" />
       </button>
     </div>
 
     <!-- Search Panel -->
     <div
       v-show="showSearch"
-      class="flex items-center gap-2 px-3 py-2 border-b bg-gray-100 dark:bg-gray-800 dark:border-gray-700"
+      class="search-panel flex items-center gap-2 px-3 py-2 border-b bg-gray-100 dark:bg-gray-800 dark:border-gray-700"
     >
       <input
         v-model="searchQuery"
@@ -2779,30 +2896,36 @@ onUnmounted(() => {
     </div>
 
     <!-- Tabs -->
-    <div class="flex items-center gap-1 px-2 py-1 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 overflow-x-auto">
+    <div class="tab-bar flex items-center gap-1 px-2 py-1 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 overflow-x-auto">
       <button
         @click="toggleSidebar"
-        class="px-2 py-1 text-sm rounded hover:bg-gray-200 dark:hover:bg-gray-700 mr-2"
-        :class="showSidebar ? 'bg-gray-200 dark:bg-gray-700' : ''"
+        class="tab-icon-btn"
+        :class="{ active: showSidebar }"
         title="文件树 (Ctrl+B)"
       >
-        📁
+        <PanelLeft :size="16" />
       </button>
       <div
         v-for="tab in tabs"
         :key="tab.id"
         @click="setActiveTab(tab.id)"
-        class="flex items-center gap-1 px-3 py-1 text-sm rounded cursor-pointer group"
-        :class="tab.id === activeTabId ? 'bg-white dark:bg-gray-900 shadow-sm' : 'hover:bg-gray-200 dark:hover:bg-gray-700'"
+        @auxclick="(e: MouseEvent) => { if (e.button === 1) closeTab(tab.id, e); }"
+        class="tab-item"
+        :class="{ active: tab.id === activeTabId }"
       >
         <span class="max-w-32 truncate">{{ tab.name }}</span>
-        <span v-if="!tab.saved" class="text-orange-500">●</span>
+        <span v-if="!tab.saved" class="tab-unsaved" title="未保存"></span>
         <button
-          @click="closeTab(tab.id, $event)"
-          class="opacity-0 group-hover:opacity-100 hover:text-red-500 ml-1"
-        >×</button>
+          @click.stop="closeTab(tab.id, $event)"
+          class="tab-close"
+          title="关闭"
+        >
+          <X :size="12" />
+        </button>
       </div>
-      <button @click="createNewTab()" class="px-2 py-1 text-sm rounded hover:bg-gray-200 dark:hover:bg-gray-700">+</button>
+      <button @click="createNewTab()" class="tab-icon-btn" title="新建标签 (Ctrl+N)">
+        <Plus :size="14" />
+      </button>
     </div>
 
     <!-- Main Content -->
@@ -2810,7 +2933,7 @@ onUnmounted(() => {
       <!-- Sidebar -->
       <div
         v-show="showSidebar"
-        class="flex border-r dark:border-gray-700 bg-gray-50 dark:bg-gray-800 overflow-hidden"
+        class="sidebar flex border-r dark:border-gray-700 bg-gray-50 dark:bg-gray-800 overflow-hidden"
         :style="{ width: sidebarWidth + 'px' }"
       >
         <div class="flex-1 overflow-auto py-2 px-2">
@@ -3127,24 +3250,409 @@ onUnmounted(() => {
   color: #fecaca;
 }
 
+.toolbar {
+  min-height: 40px;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  height: 30px;
+  border-radius: 6px;
+  background: transparent;
+  transition: background 150ms ease;
+}
+.toolbar-group + .toolbar-group {
+  margin-left: 2px;
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  padding-left: 8px;
+  margin-left: 4px;
+}
+.dark .toolbar-group + .toolbar-group {
+  border-left-color: rgba(255, 255, 255, 0.08);
+}
+
 .toolbar-btn {
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 14px;
-  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 6px;
+  border-radius: 5px;
   background: transparent;
   border: none;
-  color: #666;
-  transition: background 0.2s;
+  color: #4b5563;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease, transform 100ms ease;
+  -webkit-user-select: none;
+  user-select: none;
+  font-size: 13px;
+  line-height: 1;
 }
 .toolbar-btn:hover {
-  background: #e5e5e5;
+  background: rgba(0, 0, 0, 0.06);
+  color: #111827;
+}
+.toolbar-btn:active {
+  transform: scale(0.96);
+}
+.toolbar-btn:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.5);
+  outline-offset: 1px;
+}
+.toolbar-btn.active {
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
 }
 .dark .toolbar-btn {
-  color: #aaa;
+  color: #9ca3af;
 }
 .dark .toolbar-btn:hover {
-  background: #333;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3f4f6;
+}
+.dark .toolbar-btn.active {
+  background: rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+}
+
+.toolbar-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.toolbar-select {
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #4b5563;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+  outline: none;
+}
+.toolbar-select:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+.dark .toolbar-select {
+  color: #9ca3af;
+}
+.dark .toolbar-select:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.theme-toggle-icon {
+  transition: transform 200ms ease;
+}
+.toolbar-btn:hover .theme-toggle-icon {
+  transform: rotate(20deg);
+}
+
+.overflow-menu {
+  animation: overflow-fade-in 120ms ease-out;
+}
+@keyframes overflow-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.overflow-menu-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #9ca3af;
+  padding: 6px 12px 4px;
+}
+.overflow-menu-divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.06);
+  margin: 4px 0;
+}
+.dark .overflow-menu-divider {
+  background: rgba(255, 255, 255, 0.08);
+}
+.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  color: #374151;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+.overflow-menu-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+.dark .overflow-menu-item {
+  color: #d1d5db;
+}
+.dark .overflow-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 打印:隐藏工具栏/Tab/侧边栏/状态栏,只打印预览内容 */
+@media print {
+  body { background: white !important; color: black !important; }
+  .toolbar,
+  .tab-bar,
+  .sidebar,
+  .search-panel,
+  .empty-state,
+  .toolbar-tabs,
+  .tab-icon-btn,
+  .tab-item,
+  .overflow-menu,
+  .print-hint {
+    display: none !important;
+  }
+  .preview-area,
+  .editor-area {
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+  }
+  .markdown-body { max-width: 100% !important; }
+  .ink-image-toolbar,
+  .ink-codeblock-toolbar,
+  .ink-table-toolbar {
+    display: none !important;
+  }
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  pre, blockquote, table, img, figure {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  p, li { orphans: 3; widows: 3; }
+  a { color: inherit !important; text-decoration: none !important; }
+  a[href]::after { content: "" !important; }
+}
+
+/* 打印提示横幅 */
+.print-hint {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 480px;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.print-hint-icon {
+  color: #2563eb;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.print-hint-body strong {
+  color: #111827;
+  display: block;
+  margin-bottom: 2px;
+}
+.print-hint-close {
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.print-hint-close:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #374151;
+}
+.dark .print-hint {
+  background: #1f2937;
+  border-color: #374151;
+  color: #d1d5db;
+}
+.dark .print-hint-body strong { color: #f3f4f6; }
+.dark .print-hint-close { color: #6b7280; }
+.dark .print-hint-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #d1d5db;
+}
+@keyframes print-hint-in {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.print-hint { animation: print-hint-in 200ms ease-out; }
+
+/* Tab 栏 */
+.tab-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  transition: background-color 150ms ease, color 150ms ease;
+  flex-shrink: 0;
+}
+.tab-icon-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #111827;
+}
+.tab-icon-btn.active {
+  background: rgba(0, 0, 0, 0.08);
+  color: #2563eb;
+}
+.dark .tab-icon-btn {
+  color: #9ca3af;
+}
+.dark .tab-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3f4f6;
+}
+.dark .tab-icon-btn.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #93c5fd;
+}
+
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  color: #4b5563;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+  flex-shrink: 0;
+  position: relative;
+  user-select: none;
+}
+.tab-item:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: #111827;
+}
+.tab-item.active {
+  background: #ffffff;
+  color: #111827;
+  border-bottom-color: #2563eb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.tab-item:hover .tab-close {
+  opacity: 1;
+}
+.dark .tab-item {
+  color: #9ca3af;
+}
+.dark .tab-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #f3f4f6;
+}
+.dark .tab-item.active {
+  background: #1f2937;
+  color: #f3f4f6;
+  border-bottom-color: #60a5fa;
+}
+
+.tab-unsaved {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  flex-shrink: 0;
+}
+
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, background-color 100ms ease, color 100ms ease;
+}
+.tab-close:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+.tab-item.active .tab-close {
+  opacity: 0.6;
+}
+
+/* 全局过渡:暗色/主题切换时不抖 */
+.toolbar,
+.overflow-menu,
+.tab-item,
+.toolbar-btn,
+.toolbar-select,
+.tab-icon-btn,
+.editor-area {
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* 专注模式样式 */
