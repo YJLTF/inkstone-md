@@ -5,15 +5,27 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "deep-link:default",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
     "fs:default",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
+    "fs:allow-write-file",
     "core:window:allow-set-title",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
     {
       "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
       "allow": [{ "path": "**" }]
     }
   ]
