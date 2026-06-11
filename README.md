@@ -233,4 +233,4 @@ V1.0 之后的候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md),包括 DO
 
 ## 许可证
 
-MIT License
+GPL-3.0 License

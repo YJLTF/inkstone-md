@@ -233,4 +233,4 @@ Issues and Pull Requests are welcome. Before submitting a PR, run `npm install`,
 
 ## License
 
-MIT License
+GPL-3.0 License
