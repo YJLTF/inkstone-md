@@ -88,3 +88,219 @@ html, body, #app {
 .dark .markdown-body hr { border-top-color: #444; }
 
 .katex-display { margin: 1em 0; overflow-x: auto; }
+
+/* ===========================================================
+   主题系统:通过 <html data-theme="xxx"> 切换
+   每个主题都有 light/dark 两种 mode(由 .dark 类控制)
+   =========================================================== */
+
+/* ----- GitHub 主题 ----- */
+[data-theme="github"] {
+  color: #1f2328;
+  background-color: #ffffff;
+}
+[data-theme="github"].dark {
+  color: #e6edf3;
+  background-color: #0d1117;
+}
+[data-theme="github"] .markdown-body h1,
+[data-theme="github"] .markdown-body h2 {
+  border-bottom-color: #d1d9e0;
+}
+[data-theme="github"].dark .markdown-body h1,
+[data-theme="github"].dark .markdown-body h2 {
+  border-bottom-color: #3d444d;
+}
+[data-theme="github"] .markdown-body code {
+  background: #eff1f3;
+  color: #1f2328;
+}
+[data-theme="github"].dark .markdown-body code {
+  background: #161b22;
+  color: #e6edf3;
+}
+[data-theme="github"] .markdown-body pre {
+  background: #f6f8fa;
+}
+[data-theme="github"].dark .markdown-body pre {
+  background: #161b22;
+}
+[data-theme="github"] .markdown-body blockquote {
+  border-left-color: #d1d9e0;
+  color: #59636e;
+}
+[data-theme="github"].dark .markdown-body blockquote {
+  border-left-color: #3d444d;
+  color: #9198a1;
+}
+[data-theme="github"] .markdown-body th {
+  background: #f6f8fa;
+}
+[data-theme="github"].dark .markdown-body th {
+  background: #161b22;
+}
+[data-theme="github"] .markdown-body th,
+[data-theme="github"] .markdown-body td {
+  border-color: #d1d9e0;
+}
+[data-theme="github"].dark .markdown-body th,
+[data-theme="github"].dark .markdown-body td {
+  border-color: #3d444d;
+}
+[data-theme="github"] .markdown-body a {
+  color: #0969da;
+}
+[data-theme="github"].dark .markdown-body a {
+  color: #58a6ff;
+}
+[data-theme="github"] .markdown-body hr {
+  border-top-color: #d1d9e0;
+}
+[data-theme="github"].dark .markdown-body hr {
+  border-top-color: #3d444d;
+}
+
+/* ----- One Dark 主题(仅 dark) ----- */
+[data-theme="onedark"] {
+  /* 强制 dark:即使去掉 .dark 类也按暗色显示 */
+  color: #abb2bf;
+  background-color: #282c34;
+}
+[data-theme="onedark"].dark {
+  color: #abb2bf;
+  background-color: #282c34;
+}
+[data-theme="onedark"] .markdown-body h1,
+[data-theme="onedark"] .markdown-body h2 {
+  border-bottom-color: #3e4452;
+  color: #e5c07b;
+}
+[data-theme="onedark"] .markdown-body h3,
+[data-theme="onedark"] .markdown-body h4,
+[data-theme="onedark"] .markdown-body h5,
+[data-theme="onedark"] .markdown-body h6 {
+  color: #e5c07b;
+}
+[data-theme="onedark"] .markdown-body code {
+  background: #3e4452;
+  color: #e06c75;
+}
+[data-theme="onedark"] .markdown-body pre {
+  background: #21252b;
+  color: #abb2bf;
+}
+[data-theme="onedark"] .markdown-body pre code {
+  color: #abb2bf;
+}
+[data-theme="onedark"] .markdown-body blockquote {
+  border-left-color: #3e4452;
+  color: #7f848e;
+}
+[data-theme="onedark"] .markdown-body th {
+  background: #21252b;
+}
+[data-theme="onedark"] .markdown-body th,
+[data-theme="onedark"] .markdown-body td {
+  border-color: #3e4452;
+}
+[data-theme="onedark"] .markdown-body a {
+  color: #61afef;
+}
+[data-theme="onedark"] .markdown-body hr {
+  border-top-color: #3e4452;
+}
+
+/* ----- Typora 主题(衬线字体 + 暖白) ----- */
+[data-theme="typora"] {
+  color: #2c2c2c;
+  background-color: #ffffff;
+  font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif;
+}
+[data-theme="typora"].dark {
+  color: #d0d0d0;
+  background-color: #1f1f1f;
+  font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif;
+}
+[data-theme="typora"] .markdown-body {
+  max-width: 760px;
+  font-size: 1.05rem;
+  line-height: 1.75;
+}
+[data-theme="typora"] .markdown-body h1,
+[data-theme="typora"] .markdown-body h2,
+[data-theme="typora"] .markdown-body h3,
+[data-theme="typora"] .markdown-body h4,
+[data-theme="typora"] .markdown-body h5,
+[data-theme="typora"] .markdown-body h6 {
+  font-family: inherit;
+  color: #1a1a1a;
+}
+[data-theme="typora"].dark .markdown-body h1,
+[data-theme="typora"].dark .markdown-body h2,
+[data-theme="typora"].dark .markdown-body h3,
+[data-theme="typora"].dark .markdown-body h4,
+[data-theme="typora"].dark .markdown-body h5,
+[data-theme="typora"].dark .markdown-body h6 {
+  color: #f0f0f0;
+}
+[data-theme="typora"] .markdown-body h1,
+[data-theme="typora"] .markdown-body h2 {
+  border-bottom: 1px solid #ececec;
+}
+[data-theme="typora"].dark .markdown-body h1,
+[data-theme="typora"].dark .markdown-body h2 {
+  border-bottom-color: #2c2c2c;
+}
+[data-theme="typora"] .markdown-body code {
+  background: #f4f0ec;
+  color: #b3594a;
+  font-family: 'JetBrains Mono', 'Cascadia Code', monospace;
+  font-size: 0.9em;
+}
+[data-theme="typora"].dark .markdown-body code {
+  background: #2a2a2a;
+  color: #e8a292;
+}
+[data-theme="typora"] .markdown-body pre {
+  background: #faf8f5;
+  border: 1px solid #ececec;
+}
+[data-theme="typora"].dark .markdown-body pre {
+  background: #252525;
+  border-color: #2c2c2c;
+}
+[data-theme="typora"] .markdown-body blockquote {
+  border-left-color: #c9c2b8;
+  color: #777;
+  font-style: italic;
+}
+[data-theme="typora"].dark .markdown-body blockquote {
+  border-left-color: #444;
+  color: #999;
+}
+[data-theme="typora"] .markdown-body th {
+  background: #f4f0ec;
+}
+[data-theme="typora"].dark .markdown-body th {
+  background: #2a2a2a;
+}
+[data-theme="typora"] .markdown-body th,
+[data-theme="typora"] .markdown-body td {
+  border-color: #ececec;
+}
+[data-theme="typora"].dark .markdown-body th,
+[data-theme="typora"].dark .markdown-body td {
+  border-color: #2c2c2c;
+}
+[data-theme="typora"] .markdown-body a {
+  color: #3b82f6;
+}
+[data-theme="typora"].dark .markdown-body a {
+  color: #60a5fa;
+}
+[data-theme="typora"] .markdown-body hr {
+  border-top-color: #ececec;
+}
+[data-theme="typora"].dark .markdown-body hr {
+  border-top-color: #2c2c2c;
+}
