@@ -8,8 +8,8 @@ import katex from "katex";
 import mermaid from "mermaid";
 import "katex/dist/katex.min.css";
 import "highlight.js/styles/github-dark.css";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { listen, emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
@@ -35,12 +35,18 @@ const md = new MarkdownIt({
   linkify: true,
   typographer: true,
   highlight: (str, lang) => {
+    // 用 <div class="line"> 把每行包起来,这样 CSS 能让行号与代码行一一对齐。
+    const wrap = (s: string) =>
+      s
+        .split("\n")
+        .map((line) => `<div class="line">${line || " "}</div>`)
+        .join("");
     if (lang && hljs.getLanguage(lang)) {
       try {
-        return hljs.highlight(str, { language: lang }).value;
+        return wrap(hljs.highlight(str, { language: lang }).value);
       } catch {}
     }
-    return "";
+    return wrap(str);
   },
 });
 md.use(mk, { enabled: true, label: true });
@@ -101,10 +107,39 @@ interface Heading {
 }
 
 const showSidebar = ref(false);
-const sidebarMode = ref<'tree' | 'outline' | 'recent'>('outline');
+const sidebarMode = ref<'tree' | 'outline' | 'recent' | 'assets'>('outline');
 const sidebarWidth = ref(280); // 增加默认宽度以容纳按钮
 const isResizing = ref(false);
 const isDark = ref(localStorage.getItem('isDark') === 'true');
+type ThemeName = "inkstone" | "github" | "onedark" | "typora";
+const THEME_OPTIONS: { value: ThemeName; label: string; forceDark?: boolean }[] = [
+  { value: "inkstone", label: "InkStone" },
+  { value: "github", label: "GitHub" },
+  { value: "onedark", label: "One Dark", forceDark: true },
+  { value: "typora", label: "Typora" },
+];
+const themeName = ref<ThemeName>(
+  (localStorage.getItem("themeName") as ThemeName) || "inkstone",
+);
+function setTheme(name: ThemeName) {
+  themeName.value = name;
+  localStorage.setItem("themeName", name);
+  const opt = THEME_OPTIONS.find((o) => o.value === name);
+  document.documentElement.setAttribute("data-theme", name);
+  // onedark 等强制 dark 主题:自动切到 dark
+  if (opt?.forceDark && !isDark.value) {
+    isDark.value = true;
+    document.documentElement.classList.add("dark");
+    localStorage.setItem("isDark", "true");
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "loose",
+      fontFamily: "ui-sans-serif, system-ui, sans-serif",
+    });
+    nextTick(() => renderMermaidDiagrams());
+  }
+}
 const showPreview = ref(false);
 const showSplit = ref(true);
 const typewriterMode = ref(localStorage.getItem('typewriterMode') === 'true');
@@ -173,6 +208,267 @@ function addToRecentFiles(path: string) {
 function clearRecentFiles() {
   recentFiles.value = [];
   saveRecentFiles();
+}
+
+// 当前文档中引用的资源(图为主)列表
+interface DocumentAsset {
+  raw: string;
+  name: string;
+  relative: string;
+  resolved: string;
+  exists: boolean;
+}
+
+const assetExistsCache = new Map<string, boolean>();
+
+const documentAssets = computed<DocumentAsset[]>(() => {
+  if (!activeTab.value) return [];
+  const content = activeTab.value.content;
+  const seen = new Set<string>();
+  const list: DocumentAsset[] = [];
+  const re = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    const raw = m[1];
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    const name = getFileName(raw.split("?")[0].split("#")[0]);
+    const isRemote = /^(https?:|data:|blob:|tauri:|asset:)/i.test(raw);
+    const filePath = activeTab.value.path;
+    let resolved = raw;
+    let relative = raw;
+    if (!isRemote && filePath) {
+      const dir = filePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+      if (isAbsolutePath(raw)) {
+        resolved = posixNormalize(raw.replace(/\\/g, "/"));
+        relative = raw;
+      } else {
+        resolved = posixNormalize(dir + "/" + raw);
+        relative = raw;
+      }
+    }
+    list.push({ raw, name, relative, resolved, exists: assetExistsCache.get(resolved) ?? true });
+  }
+  return list;
+});
+
+async function refreshAssetExists() {
+  // 异步刷新:对每个本地资源 get_file_info 一次
+  const next = new Map<string, boolean>();
+  await Promise.all(
+    documentAssets.value.map(async (a) => {
+      if (/^(https?:|data:|blob:|tauri:|asset:)/i.test(a.raw)) {
+        next.set(a.resolved, true);
+        return;
+      }
+      try {
+        await invoke("get_file_info", { path: a.resolved });
+        next.set(a.resolved, true);
+      } catch {
+        next.set(a.resolved, false);
+      }
+    }),
+  );
+  assetExistsCache.clear();
+  for (const [k, v] of next) assetExistsCache.set(k, v);
+}
+
+async function revealAsset(absPath: string) {
+  try {
+    await invoke("reveal_in_folder", { path: absPath });
+  } catch (err) {
+    alert("无法定位该资源: " + err);
+  }
+}
+
+async function copyAssetPath(p: string) {
+  try {
+    await navigator.clipboard.writeText(p);
+  } catch (err) {
+    console.error("复制失败:", err);
+  }
+}
+
+function removeAssetReference(raw: string) {
+  if (!activeTab.value) return;
+  // 删除所有 `![alt](raw)` 形式的整行(简单替换)
+  const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`!\\[[^\\]]*\\]\\(${escaped}(?:\\s+"[^"]*")?\\)\\n?`, "g");
+  activeTab.value.content = activeTab.value.content.replace(re, "");
+  activeTab.value.saved = false;
+}
+
+// 把文档中所有 `![alt](oldRaw)` 形式的引用替换为 `![alt](newRaw)`
+function replaceAssetRefInContent(oldRaw: string, newRaw: string) {
+  if (!activeTab.value) return;
+  const escaped = oldRaw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(
+    `!\\[([^\\]]*)\\]\\(${escaped}(?:\\s+"([^"]*)")?\\)`,
+    "g",
+  );
+  activeTab.value.content = activeTab.value.content.replace(
+    re,
+    (_m, alt: string) => `![${alt}](${newRaw})`,
+  );
+  activeTab.value.saved = false;
+}
+
+function isRemoteAsset(raw: string): boolean {
+  return /^(https?:|data:|blob:|tauri:|asset:)/i.test(raw);
+}
+
+function isInvalidName(name: string): boolean {
+  return (
+    name.includes("/") ||
+    name.includes("\\") ||
+    name.includes(":") ||
+    name.includes("*") ||
+    name.includes("?") ||
+    name.includes('"') ||
+    name.includes("<") ||
+    name.includes(">") ||
+    name.includes("|")
+  );
+}
+
+async function renameAsset(asset: DocumentAsset) {
+  if (isRemoteAsset(asset.raw)) {
+    alert("远程资源不能重命名。");
+    return;
+  }
+  const newName = window.prompt("重命名为(仅文件名):", asset.name);
+  if (!newName || newName === asset.name) return;
+  if (isInvalidName(newName)) {
+    alert("文件名包含非法字符。");
+    return;
+  }
+  const dir = asset.resolved.replace(/[\\/][^\\/]+$/, "").replace(/\\/g, "/");
+  const newPath = `${dir}/${newName}`;
+  try {
+    await invoke("rename_path", { oldPath: asset.resolved, newPath });
+    replaceAssetRefInContent(asset.raw, newName);
+    if (workspacePath.value) await loadFileTree();
+    await refreshAssetExists();
+  } catch (err) {
+    alert("重命名失败: " + err);
+  }
+}
+
+async function moveAsset(asset: DocumentAsset) {
+  if (isRemoteAsset(asset.raw)) {
+    alert("远程资源不能移动。");
+    return;
+  }
+  const target = await open({ directory: true, multiple: false });
+  if (!target) return;
+  const targetDir = (target as string).replace(/\\/g, "/").replace(/\/$/, "");
+  const newPath = `${targetDir}/${asset.name}`;
+  try {
+    await invoke("rename_path", { oldPath: asset.resolved, newPath });
+    // 新引用:尽量用相对路径,否则用绝对路径
+    let newRaw = newPath;
+    if (activeTab.value?.path) {
+      const fileDir = activeTab.value.path
+        .replace(/\\/g, "/")
+        .replace(/[\\/][^\\/]+$/, "");
+      if (fileDir === targetDir) {
+        newRaw = `./${asset.name}`;
+      }
+    }
+    replaceAssetRefInContent(asset.raw, newRaw);
+    if (workspacePath.value) await loadFileTree();
+    await refreshAssetExists();
+  } catch (err) {
+    alert("移动失败: " + err);
+  }
+}
+
+async function getFileSize(p: string): Promise<number> {
+  try {
+    const info = await invoke<{ name: string; size: number }>("get_file_info", {
+      path: p,
+    });
+    return info.size;
+  } catch {
+    return 0;
+  }
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+async function compressAsset(asset: DocumentAsset) {
+  if (isRemoteAsset(asset.raw)) {
+    alert("远程资源不能压缩。");
+    return;
+  }
+  const fmt = window.prompt("目标格式(输入 jpeg 或 png):", "jpeg");
+  if (!fmt) return;
+  const format = fmt.trim().toLowerCase();
+  if (format !== "jpeg" && format !== "png") {
+    alert("仅支持 jpeg / png。");
+    return;
+  }
+  let quality = 80;
+  if (format === "jpeg") {
+    const q = window.prompt("JPEG 质量(1-100):", "80");
+    if (q === null) return;
+    const n = Number(q);
+    if (!Number.isFinite(n) || n < 1 || n > 100) {
+      alert("质量必须是 1-100 之间的数字。");
+      return;
+    }
+    quality = Math.round(n);
+  }
+  const dir = asset.resolved.replace(/[\\/][^\\/]+$/, "").replace(/\\/g, "/");
+  const base = asset.name.replace(/\.[^.]+$/, "");
+  const ext = format === "jpeg" ? "jpg" : "png";
+  const dest = `${dir}/${base}.min.${ext}`;
+  const before = await getFileSize(asset.resolved);
+  try {
+    const afterSize = (await invoke<number>("compress_image", {
+      src: asset.resolved,
+      dest,
+      format,
+      quality,
+    })) as number;
+    const savedBytes = before - afterSize;
+    const ok = window.confirm(
+      `压缩完成!\n` +
+        `原: ${formatBytes(before)}\n` +
+        `新: ${formatBytes(afterSize)}\n` +
+        `节省: ${formatBytes(savedBytes)} (${before > 0 ? Math.round((savedBytes / before) * 100) : 0}%)\n\n` +
+        `是否替换原文件并更新文档引用?`,
+    );
+    if (!ok) {
+      // 不替换,清理临时文件
+      try {
+        await invoke("delete_path", { path: dest });
+      } catch {}
+      return;
+    }
+    // 删除原文件,把新文件 rename 成原名
+    await invoke("delete_path", { path: asset.resolved });
+    const finalName = `${base}.${ext}`;
+    const finalPath = `${dir}/${finalName}`;
+    await invoke("rename_path", { oldPath: dest, newPath: finalPath });
+    // 更新引用:用最终文件名(同目录 → 相对名,否则用绝对路径)
+    let newRaw = finalName;
+    if (activeTab.value?.path) {
+      const fileDir = activeTab.value.path
+        .replace(/\\/g, "/")
+        .replace(/[\\/][^\\/]+$/, "");
+      if (fileDir !== dir) newRaw = finalPath;
+    }
+    replaceAssetRefInContent(asset.raw, newRaw);
+    if (workspacePath.value) await loadFileTree();
+    await refreshAssetExists();
+  } catch (err) {
+    alert("压缩失败: " + err);
+  }
 }
 
 function getFileName(path: string): string {
@@ -261,6 +557,480 @@ function renderFileTree(entries: FileEntry[], depth: number = 0): any[] {
 // 选中文本统计
 const selectedCount = ref(0);
 
+// ---- 图片路径预处理 / 工具栏包装 ----
+
+const IMAGE_SCALES = [25, 50, 75, 100] as const;
+type ImageAlign = "left" | "center" | "right";
+
+function isAbsolutePath(p: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("\\\\") || p.startsWith("/");
+}
+
+function posixNormalize(p: string): string {
+  const isAbs = p.startsWith("/");
+  const parts = p.split("/");
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return (isAbs ? "/" : "") + out.join("/");
+}
+
+function toTauriAssetUrl(src: string, currentFilePath: string | null): string {
+  if (/^(https?:|data:|blob:|tauri:|asset:)/i.test(src)) return src;
+  let abs: string;
+  if (isAbsolutePath(src)) {
+    abs = posixNormalize(src.replace(/\\/g, "/"));
+  } else {
+    if (!currentFilePath) return src;
+    const dir = currentFilePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
+    abs = posixNormalize(dir + "/" + src);
+  }
+  try {
+    return convertFileSrc(abs);
+  } catch {
+    return src;
+  }
+}
+
+/**
+ * 在 markdown-it 渲染前,把图片语法里的本地 src 改写为 tauri 资源 URL,
+ * 让 webview 通过 assetProtocol 正确加载本地图片。
+ * 规则:
+ *   - http(s)/data/blob/tauri/asset: 原样保留
+ *   - Windows 绝对路径 (C:\...) / UNC / 类 Unix 绝对路径: 规范化后 convertFileSrc
+ *   - 相对路径: 相对当前 tab 文件所在目录,convertFileSrc
+ *   - 文件未保存: 保留原 src(后续保存后再打开会失效,但不破坏编辑)
+ */
+function preprocessImageSrcs(content: string, currentFilePath: string | null): string {
+  return content.replace(
+    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+    (m, alt: string, src: string, _title?: string) => {
+      const newSrc = toTauriAssetUrl(src, currentFilePath);
+      if (newSrc === src) return m;
+      return `![${alt}](${newSrc})`;
+    },
+  );
+}
+
+/**
+ * 将文本中出现的 `[[toc]]` 标记替换为基于 `headings` 渲染出的目录 HTML。
+ * `markdown-it` 配 `html: true` 会把 inline HTML 原样保留,所以我们直接在源字符串
+ * 上做替换,然后交给 markdown-it 渲染,这样目录内含的 <ul> 不会被解析成 markdown。
+ */
+function preprocessToc(content: string, heads: Heading[]): string {
+  if (!content.includes('[[toc]]')) return content;
+  if (heads.length === 0) {
+    return content.replace(/\[\[toc\]\]/g, '<p class="ink-toc-empty">暂无标题</p>');
+  }
+  const buildList = (idx: number, minLevel: number): { html: string; next: number } => {
+    let out = '<ul>';
+    while (idx < heads.length) {
+      const h = heads[idx];
+      if (h.level < minLevel) break;
+      if (h.level > minLevel) {
+        const sub = buildList(idx, h.level);
+        out += `<li>${sub.html}`;
+        idx = sub.next;
+        out += '</li>';
+        continue;
+      }
+      const anchor = slugify(h.text);
+      out += `<li><a href="#${anchor}">${escapeHtml(h.text)}</a></li>`;
+      idx++;
+    }
+    out += '</ul>';
+    return { html: out, next: idx };
+  };
+  const { html } = buildList(0, heads[0].level);
+  return content.replace(
+    /\[\[toc\]\]/g,
+    `<nav class="ink-toc"><div class="ink-toc-title">目录</div>${html}</nav>`,
+  );
+}
+
+function slugify(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w\u4e00-\u9fa5-]/g, '')
+    .replace(/-+/g, '-');
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * 把渲染后的 <img> 包成可交互结构:
+ *   <span class="ink-image-wrap" data-scale="100" data-align="center">
+ *     <img src="..." data-original="..." />
+ *     <span class="ink-image-toolbar"> ... 缩放/对齐 按钮 ... </span>
+ *   </span>
+ * 不写回 markdown,仅控制显示。
+ */
+
+/**
+ * 用 markdown-it 解析 content,提取每个表格在源 markdown 中的字符 offset 区间,
+ * 用于表格编辑"保存到源"功能定位原段。
+ * `token.map = [startLine, endLine]` 0-indexed 半开区间,lineToOffset 把行号转为字符 offset。
+ */
+function findTableRanges(content: string): { start: number; end: number; md: string }[] {
+  let tokens: any[] = [];
+  try {
+    tokens = md.parse(content, {});
+  } catch {
+    return [];
+  }
+  const lines = content.split("\n");
+  const lineToOffset = (line0: number) => {
+    let off = 0;
+    for (let l = 0; l < line0 && l < lines.length; l++) off += lines[l].length + 1;
+    return off;
+  };
+  const ranges: { start: number; end: number; md: string }[] = [];
+  for (const t of tokens) {
+    if (t.type === "table_open" && t.map) {
+      const [sLine, eLine] = t.map as [number, number];
+      const start = lineToOffset(sLine);
+      const end = lineToOffset(eLine);
+      ranges.push({ start, end, md: content.slice(start, end) });
+    }
+  }
+  return ranges;
+}
+function wrapImagesForInteraction(html: string): string {
+  return html.replace(/<img\s+([^>]*?)\/?>/g, (m, attrs: string) => {
+    const srcMatch = attrs.match(/\bsrc=["']([^"']+)["']/i);
+    if (!srcMatch) return m;
+    const src = srcMatch[1];
+    // 跳过 base64 / data / 已经在 asset 协议里的(可选)
+    return (
+      `<span class="ink-image-wrap" data-scale="100" data-align="center">` +
+        `<img ${attrs} data-original="${src.replace(/"/g, "&quot;")}" />` +
+        `<span class="ink-image-toolbar" contenteditable="false">` +
+          `<button type="button" data-act="zoom-out" title="缩小">−</button>` +
+          `<span class="ink-image-scale">100%</span>` +
+          `<button type="button" data-act="zoom-in" title="放大">+</button>` +
+          `<span class="ink-image-sep"></span>` +
+          `<button type="button" data-act="align-left" title="左对齐">⫷</button>` +
+          `<button type="button" data-act="align-center" title="居中">≡</button>` +
+          `<button type="button" data-act="align-right" title="右对齐">⫸</button>` +
+        `</span>` +
+      `</span>`
+    );
+  });
+}
+
+/**
+ * 把 markdown-it 渲染出的 `<pre><code class="language-xxx">…</code></pre>`
+ * 包成 `<div class="ink-codeblock">` 并附加语言标签 + 复制按钮。
+ * 行号这一版不做(留给后续版本),只做复制 + 语言徽标。
+ */
+function wrapCodeBlocks(html: string): string {
+  return html.replace(
+    /<pre>\s*<code(?:\s+class="([^"]*)")?\s*>([\s\S]*?)<\/code>\s*<\/pre>/g,
+    (_m, cls: string | undefined, inner: string) => {
+      const langMatch = (cls || "").match(/language-([^\s"]+)/);
+      const lang = langMatch ? langMatch[1] : "";
+      const lineMatches = inner.match(/<div class="line">/g) || [];
+      const lineCount = Math.max(lineMatches.length, 1);
+      const nums = Array.from({ length: lineCount }, (_, i) => `<li>${i + 1}</li>`).join("");
+      return (
+        `<div class="ink-codeblock" data-lang="${lang}">` +
+          `<div class="ink-codeblock-toolbar">` +
+            `<span class="ink-codeblock-lang">${lang || "text"}</span>` +
+            `<button type="button" class="ink-codeblock-copy" data-act="copy-code">复制</button>` +
+          `</div>` +
+          `<div class="ink-codeblock-body">` +
+            `<pre class="${cls ? (cls.includes("hljs") ? "hljs" : "") : ""}">` +
+              `<ol class="ink-line-nums">${nums}</ol>` +
+              `<code${cls ? ` class="${cls}"` : ""}>${inner}</code>` +
+            `</pre>` +
+          `</div>` +
+        `</div>`
+      );
+    },
+  );
+}
+
+function bindCodeToolbar(root: HTMLElement) {
+  if ((root as any)._inkCodeBound) return;
+  (root as any)._inkCodeBound = true;
+  root.addEventListener("click", async (e: Event) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".ink-codeblock-copy");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const block = btn.closest(".ink-codeblock");
+    if (!block) return;
+    const code = block.querySelector("code") as HTMLElement | null;
+    if (!code) return;
+    const text = code.textContent ?? "";
+    try {
+      await navigator.clipboard.writeText(text);
+      const orig = btn.textContent;
+      btn.textContent = "已复制";
+      btn.classList.add("copied");
+      window.setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove("copied");
+      }, 1500);
+    } catch (err) {
+      console.error("复制失败:", err);
+      btn.textContent = "复制失败";
+    }
+  });
+}
+
+/**
+ * 把渲染出的 `<table>` 包成 `<div class="ink-table">` 并附加工具栏。
+ * 支持:
+ *   - + 行 / - 行 / + 列 / - 列:直接改 DOM
+ *   - 编辑模式:切换 td/th 的 contenteditable
+ *   - 复制为 Markdown:把当前 DOM 表转回 md 字符串,写入剪贴板
+ *   - 保存到源:把 DOM 表转 md,在源 markdown 中匹配 data-source-md 精确定位并替换
+ * `tableRanges` 由 `findTableRanges(content)` 提供,顺序与渲染出的 <table> 一一对应。
+ */
+function wrapTablesForEdit(
+  html: string,
+  tableRanges: { start: number; end: number; md: string }[],
+): string {
+  let idx = 0;
+  return html.replace(/<table>([\s\S]*?)<\/table>/g, (_m, inner: string) => {
+    const r = tableRanges[idx++];
+    const dataMd = r ? ` data-source-md="${encodeURIComponent(r.md)}"` : "";
+    return (
+      `<div class="ink-table" data-edit="false"${dataMd}>` +
+        `<div class="ink-table-toolbar">` +
+          `<button type="button" data-act="t-edit">✏️ 编辑</button>` +
+          `<button type="button" data-act="t-add-row">+ 行</button>` +
+          `<button type="button" data-act="t-del-row">- 行</button>` +
+          `<button type="button" data-act="t-add-col">+ 列</button>` +
+          `<button type="button" data-act="t-del-col">- 列</button>` +
+          `<button type="button" data-act="t-save">💾 保存到源</button>` +
+          `<button type="button" data-act="t-copy-md">复制为 Markdown</button>` +
+        `</div>` +
+        `<table>${inner}</table>` +
+      `</div>`
+    );
+  });
+}
+
+function tableToMarkdown(table: HTMLTableElement): string {
+  const rows = Array.from(table.querySelectorAll("tr"));
+  if (rows.length === 0) return "";
+  const matrix: string[][] = rows.map((tr) =>
+    Array.from(tr.querySelectorAll("th,td")).map(
+      (c) => (c.textContent ?? "").replace(/\|/g, "\\|").trim(),
+    ),
+  );
+  // 估算列数
+  const colCount = Math.max(...matrix.map((r) => r.length));
+  for (const r of matrix) {
+    while (r.length < colCount) r.push("");
+  }
+  const out: string[] = [];
+  out.push("| " + matrix[0].join(" | ") + " |");
+  out.push("| " + matrix[0].map(() => "---").join(" | ") + " |");
+  for (let i = 1; i < matrix.length; i++) {
+    out.push("| " + matrix[i].join(" | ") + " |");
+  }
+  return out.join("\n");
+}
+
+function bindTableToolbar(root: HTMLElement) {
+  if ((root as any)._inkTableBound) return;
+  (root as any)._inkTableBound = true;
+  root.addEventListener("click", async (e: Event) => {
+    const target = e.target as HTMLElement;
+    const btn = target.closest<HTMLButtonElement>(".ink-table-toolbar button[data-act]");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = btn.closest<HTMLElement>(".ink-table");
+    if (!wrap) return;
+    const table = wrap.querySelector("table") as HTMLTableElement | null;
+    if (!table) return;
+    const act = btn.dataset.act;
+    if (act === "t-edit") {
+      const editing = wrap.dataset.edit === "true";
+      wrap.dataset.edit = String(!editing);
+      btn.textContent = editing ? "✏️ 编辑" : "✓ 完成编辑";
+      const cells = table.querySelectorAll<HTMLElement>("th, td");
+      cells.forEach((c) => {
+        if (!editing) c.setAttribute("contenteditable", "true");
+        else c.removeAttribute("contenteditable");
+      });
+      return;
+    }
+    if (act === "t-add-row") {
+      const rows = table.querySelectorAll("tr");
+      if (rows.length === 0) return;
+      const ref = rows[rows.length - 1];
+      const cols = ref.querySelectorAll("th,td").length || 1;
+      const newRow = document.createElement("tr");
+      for (let i = 0; i < cols; i++) {
+        const cell = document.createElement("td");
+        cell.textContent = " ";
+        newRow.appendChild(cell);
+      }
+      table.appendChild(newRow);
+      return;
+    }
+    if (act === "t-del-row") {
+      const rows = table.querySelectorAll("tr");
+      if (rows.length <= 1) return;
+      table.deleteRow(-1);
+      return;
+    }
+    if (act === "t-add-col") {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      rows.forEach((tr, idx) => {
+        const cell = document.createElement(idx === 0 ? "th" : "td");
+        cell.textContent = " ";
+        tr.appendChild(cell);
+      });
+      return;
+    }
+    if (act === "t-del-col") {
+      const rows = Array.from(table.querySelectorAll("tr"));
+      rows.forEach((tr) => {
+        const cells = tr.querySelectorAll("th,td");
+        if (cells.length > 1) tr.removeChild(cells[cells.length - 1]);
+      });
+      return;
+    }
+    if (act === "t-copy-md") {
+      const md = tableToMarkdown(table);
+      try {
+        await navigator.clipboard.writeText(md);
+        const orig = btn.textContent;
+        btn.textContent = "已复制";
+        btn.classList.add("copied");
+        window.setTimeout(() => {
+          btn.textContent = orig;
+          btn.classList.remove("copied");
+        }, 1500);
+      } catch (err) {
+        console.error("复制失败:", err);
+        btn.textContent = "复制失败";
+      }
+      return;
+    }
+    if (act === "t-save") {
+      const srcMd = decodeURIComponent(wrap.dataset.sourceMd || "");
+      if (!activeTab.value) return;
+      if (!srcMd) {
+        alert("此表格未携带源 markdown 信息,无法回写。");
+        return;
+      }
+      const ranges = findTableRanges(activeTab.value.content);
+      const r = ranges.find((x) => x.md === srcMd);
+      if (!r) {
+        alert(
+          "无法定位原表格段:可能文档结构已变更。请先保存当前表格,然后再编辑其他部分。",
+        );
+        return;
+      }
+      const newMd = tableToMarkdown(table);
+      activeTab.value.content =
+        activeTab.value.content.slice(0, r.start) +
+        newMd +
+        "\n" +
+        activeTab.value.content.slice(r.end);
+      activeTab.value.saved = false;
+      const orig = btn.textContent;
+      btn.textContent = "✓ 已保存";
+      btn.classList.add("copied");
+      window.setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove("copied");
+      }, 1500);
+    }
+  });
+}
+
+function applyImageTransforms(root: HTMLElement) {
+  const wraps = root.querySelectorAll<HTMLElement>(".ink-image-wrap");
+  wraps.forEach((wrap) => {
+    const img = wrap.querySelector("img") as HTMLImageElement | null;
+    if (!img) return;
+    const scale = Number(wrap.dataset.scale || "100") / 100;
+    img.style.width = `${scale * 100}%`;
+    img.style.height = "auto";
+    img.style.display = "block";
+    img.style.maxWidth = "none";
+    img.style.borderRadius = "4px";
+    const align = wrap.dataset.align as ImageAlign | undefined;
+    wrap.style.display = "block";
+    wrap.style.textAlign = align === "left" ? "left" : align === "right" ? "right" : "center";
+    const scaleLabel = wrap.querySelector(".ink-image-scale");
+    if (scaleLabel) scaleLabel.textContent = `${Math.round(scale * 100)}%`;
+  });
+}
+
+function bindImageToolbar(root: HTMLElement) {
+  if ((root as any)._inkImageToolbarBound) return;
+  (root as any)._inkImageToolbarBound = true;
+  root.addEventListener("click", (e: Event) => {
+    const target = e.target as HTMLElement;
+    const btn = target.closest<HTMLButtonElement>(".ink-image-toolbar button[data-act]");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const wrap = btn.closest<HTMLElement>(".ink-image-wrap");
+    if (!wrap) return;
+    const act = btn.dataset.act;
+    let scale = Number(wrap.dataset.scale || "100");
+    let align = (wrap.dataset.align as ImageAlign) || "center";
+    if (act === "zoom-in") {
+      const idx = IMAGE_SCALES.findIndex((v) => v > scale);
+      scale = idx === -1 ? IMAGE_SCALES[IMAGE_SCALES.length - 1] : IMAGE_SCALES[idx];
+    } else if (act === "zoom-out") {
+      const smaller = IMAGE_SCALES.filter((v) => v < scale);
+      scale = smaller.length ? smaller[smaller.length - 1] : IMAGE_SCALES[0];
+    } else if (act === "align-left") align = "left";
+    else if (act === "align-center") align = "center";
+    else if (act === "align-right") align = "right";
+    wrap.dataset.scale = String(scale);
+    wrap.dataset.align = align;
+    applyImageTransforms(root);
+  });
+}
+
+/**
+ * 解析 markdown 中 [[toc]] 形式的占位时,生成的 <a href="#slug"> 在预览中点击应滚动
+ * 到对应 heading。由于 markdown-it 默认不会给 heading 加 id,我们这里用最简实现:
+ * 点击 a 时,在 markdown 源中找到对应文本的 heading 行号,然后用现有的 jumpToHeading 跳转。
+ */
+function bindTocNavigation(root: HTMLElement) {
+  if ((root as any)._inkTocBound) return;
+  (root as any)._inkTocBound = true;
+  root.addEventListener("click", (e: Event) => {
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>(".ink-toc a[href^='#']");
+    if (!a) return;
+    e.preventDefault();
+    const hash = decodeURIComponent(a.getAttribute("href")!.slice(1));
+    if (!activeTab.value) return;
+    const lines = activeTab.value.content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/^#{1,6}\s+(.+?)\s*$/);
+      if (m && slugify(m[1]) === hash) {
+        jumpToHeading(i + 1);
+        return;
+      }
+    }
+  });
+}
+
 const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value));
 
 const charCount = computed(() => activeTab.value?.content.length ?? 0);
@@ -270,9 +1040,25 @@ const wordCount = computed(() => {
   return text.split(/\s+/).length;
 });
 
+const headings = computed(() => {
+  if (!activeTab.value) return [];
+  const content = activeTab.value.content;
+  const result: Heading[] = [];
+  const regex = /^#{1,6}\s+(.+)$/gm;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const line = content.substring(0, match.index).split('\n').length;
+    const level = match[0].indexOf(' ') - 1;
+    result.push({ level, text: match[1].trim(), line });
+  }
+  return result;
+});
+
 const renderedHTML = computed(() => {
   if (!activeTab.value) return "";
-  let html = md.render(activeTab.value.content);
+  const pre1 = preprocessImageSrcs(activeTab.value.content, activeTab.value.path);
+  const pre2 = preprocessToc(pre1, headings.value);
+  let html = md.render(pre2);
 
   // 先处理块级公式（多行 $...$）
   html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
@@ -293,13 +1079,19 @@ const renderedHTML = computed(() => {
     }
   });
 
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:4px;">');
   // Replace mermaid code blocks with placeholder divs
   html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
     const id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
     const decoded = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
     return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}"></div>`;
   });
+
+  // 包装 <img> 为可交互元素
+  html = wrapImagesForInteraction(html);
+  html = wrapCodeBlocks(html);
+  // 表格回写需要在原 markdown 字符级别定位,把每个 table 的源段挂到 div 上
+  const tableRanges = findTableRanges(pre2);
+  html = wrapTablesForEdit(html, tableRanges);
   return html;
 });
 
@@ -326,21 +1118,15 @@ async function renderMermaidDiagrams() {
 watch(renderedHTML, () => {
   nextTick(() => {
     renderMermaidDiagrams();
+    // 给所有预览区绑定图片工具栏 / TOC 跳转
+    document.querySelectorAll<HTMLElement>(".preview-area .markdown-body").forEach((root) => {
+      applyImageTransforms(root);
+      bindImageToolbar(root);
+      bindTocNavigation(root);
+      bindCodeToolbar(root);
+      bindTableToolbar(root);
+    });
   });
-});
-
-const headings = computed(() => {
-  if (!activeTab.value) return [];
-  const content = activeTab.value.content;
-  const result: Heading[] = [];
-  const regex = /^#{1,6}\s+(.+)$/gm;
-  let match;
-  while ((match = regex.exec(content)) !== null) {
-    const line = content.substring(0, match.index).split('\n').length;
-    const level = match[0].indexOf(' ') - 1;
-    result.push({ level, text: match[1].trim(), line });
-  }
-  return result;
 });
 
 const windowTitle = computed(() => {
@@ -371,6 +1157,15 @@ watch(activeTabId, () => {
   searchMatches.value = [];
   currentMatchIndex.value = -1;
 });
+
+// 当前 tab 内容 / 资源视图激活时,刷新"资源是否存在"缓存
+watch(
+  [activeTabId, () => sidebarMode.value === "assets" ? sidebarMode.value : ""],
+  () => {
+    if (sidebarMode.value === "assets") refreshAssetExists();
+  },
+  { immediate: false },
+);
 
 // 自动配对配置
 const pairConfig: Record<string, string> = {
@@ -935,6 +1730,67 @@ function insertText(text: string) {
     textarea.focus();
     textarea.setSelectionRange(start + text.length, start + text.length);
   });
+}
+
+// 粘贴图片:从剪贴板读取图片二进制,保存到当前文件同目录的 assets/ 下,并以 Markdown 图片语法插入
+async function handlePaste(e: ClipboardEvent) {
+  if (!e.clipboardData) return;
+  if (!activeTab.value) return;
+  if (!activeTab.value.path) {
+    // 阻止默认行为(否则浏览器会在光标处插入一大坨 data URL)
+    e.preventDefault();
+    alert('请先保存文件，然后再粘贴图片。');
+    return;
+  }
+
+  const items = Array.from(e.clipboardData.items);
+  const imageItem = items.find(
+    (it) => it.kind === 'file' && it.type.startsWith('image/'),
+  );
+  if (!imageItem) return; // 非图片粘贴,走默认行为
+
+  const file = imageItem.getAsFile();
+  if (!file) return;
+
+  e.preventDefault();
+
+  try {
+    const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+    const ts = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp =
+      ts.getFullYear() +
+      pad(ts.getMonth() + 1) +
+      pad(ts.getDate()) +
+      '-' +
+      pad(ts.getHours()) +
+      pad(ts.getMinutes()) +
+      pad(ts.getSeconds());
+    const rand = Math.random().toString(36).slice(2, 6);
+    const fileName = `paste-${stamp}-${rand}.${ext}`;
+
+    const filePath = activeTab.value.path;
+    const dir = filePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+    const assetsDir = `${dir}/assets`;
+    const targetPath = `${assetsDir}/${fileName}`;
+
+    // 创建 assets 目录(若已存在则忽略错误)
+    try {
+      await invoke('create_directory', { path: assetsDir });
+    } catch {}
+
+    // 写入图片字节
+    const buf = await file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buf));
+    await invoke('write_file_bytes', { path: targetPath, content: bytes });
+
+    // 插入 Markdown 图片语法(相对路径)
+    const alt = fileName.replace(/\.[^.]+$/, '');
+    insertText(`\n![${alt}](./assets/${fileName})\n`);
+  } catch (err) {
+    console.error('粘贴图片失败:', err);
+    alert('粘贴图片失败: ' + err);
+  }
 }
 
 function insertFormat(before: string, after: string = before) {
@@ -1648,6 +2504,14 @@ onMounted(async () => {
   if (isDark.value) {
     document.documentElement.classList.add("dark");
   }
+  // 应用保存的主题(onedark 强制 dark 时 setTheme 会顺便修正 isDark)
+  document.documentElement.setAttribute("data-theme", themeName.value);
+  const opt = THEME_OPTIONS.find((o) => o.value === themeName.value);
+  if (opt?.forceDark && !isDark.value) {
+    isDark.value = true;
+    document.documentElement.classList.add("dark");
+    localStorage.setItem("isDark", "true");
+  }
 
   // Initialize mermaid with theme
   mermaid.initialize({
@@ -1708,12 +2572,20 @@ onMounted(async () => {
       }
     });
 
-    // 监听命令行传递的文件路径事件
-    await listen<string>("open-file-init", async (event) => {
+    // 监听后端下发的"打开文件"事件(单实例回调 / RunEvent::Opened / 启动 argv 都会走这里)
+    await listen<string>("open-file", async (event) => {
       if (event.payload) {
         await openFile(event.payload);
       }
     });
+
+    // 通知后端"前端已就绪",触发启动挂起文件的派发
+    try {
+      await emit("frontend-ready");
+    } catch {}
+    try {
+      await invoke("frontend_ready");
+    } catch {}
 
     document.addEventListener("keydown", (e) => {
       if (e.ctrlKey) {
@@ -1833,6 +2705,7 @@ onUnmounted(() => {
         <button @click="insertText('$$')" title="数学公式" class="toolbar-btn">∑ 公式</button>
         <button @click="insertText('```\n\n```')" title="代码块" class="toolbar-btn font-mono">&lt;/&gt; 代码</button>
         <button @click="insertText('| 表头 | 表头 |\n|------|------|\n| 单元格 | 单元格 |')" title="表格" class="toolbar-btn">⊞</button>
+        <button @click="insertText('\n[[toc]]\n')" title="插入目录(在当前位置生成基于标题的目录)" class="toolbar-btn">📑 目录</button>
       </div>
 
       <div class="flex-1"></div>
@@ -1857,9 +2730,20 @@ onUnmounted(() => {
       >
         预览
       </button>
+      <select
+        :value="themeName"
+        @change="(e: any) => setTheme(e.target.value)"
+        class="px-2 py-1 text-sm rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 cursor-pointer"
+        title="切换主题"
+      >
+        <option v-for="opt in THEME_OPTIONS" :key="opt.value" :value="opt.value">
+          {{ opt.label }}
+        </option>
+      </select>
       <button
         @click="toggleDark"
         class="px-3 py-1 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
+        :title="isDark ? '切换到浅色' : '切换到深色'"
       >
         {{ isDark ? '☀️' : '🌙' }}
       </button>
@@ -1954,6 +2838,15 @@ onUnmounted(() => {
             >
               <span>🕐</span>
               <span>最近</span>
+            </button>
+            <button
+              @click="sidebarMode = 'assets'"
+              class="px-2 py-1 rounded text-xs flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
+              :class="sidebarMode === 'assets' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'hover:bg-gray-200 dark:hover:bg-gray-700'"
+              title="当前文档引用到的图片/资源"
+            >
+              <span>🖼️</span>
+              <span>资源</span>
             </button>
             <button v-if="sidebarMode === 'tree'" @click="loadFileTree" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 flex-shrink-0" title="刷新">🔄</button>
           </div>
@@ -2052,6 +2945,72 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
+          <!-- 资源视图(扫描当前文档的图片) -->
+          <div v-else-if="sidebarMode === 'assets'" class="assets-view">
+            <div v-if="documentAssets.length === 0" class="text-xs text-gray-400 dark:text-gray-500 px-2 py-4 text-center">
+              暂无图片资源<br>在文档中插入 <code class="font-mono">![]()</code> 试试
+            </div>
+            <div
+              v-for="(asset, idx) in documentAssets"
+              :key="idx"
+              class="asset-item rounded px-2 py-2 mb-1 hover:bg-gray-100 dark:hover:bg-gray-700 group"
+            >
+              <div class="flex items-center gap-2">
+                <span class="text-base">🖼️</span>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-gray-700 dark:text-gray-300 truncate" :title="asset.raw">
+                    {{ asset.name }}
+                  </div>
+                  <div class="text-xs text-gray-400 dark:text-gray-500 truncate" :title="asset.resolved">
+                    {{ asset.relative }}
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity flex-wrap">
+                <button
+                  v-if="asset.exists"
+                  @click="revealAsset(asset.resolved)"
+                  class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                  title="在文件夹中显示"
+                >📂 显示</button>
+                <button
+                  v-if="!isRemoteAsset(asset.raw) && asset.exists"
+                  @click="renameAsset(asset)"
+                  class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                  title="重命名(只改文件名)"
+                >✏️ 重命名</button>
+                <button
+                  v-if="!isRemoteAsset(asset.raw) && asset.exists"
+                  @click="moveAsset(asset)"
+                  class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                  title="移动到其他文件夹"
+                >📁 移动</button>
+                <button
+                  v-if="!isRemoteAsset(asset.raw) && asset.exists"
+                  @click="compressAsset(asset)"
+                  class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                  title="压缩图片(jpeg/png),节省体积"
+                >🗜️ 压缩</button>
+                <button
+                  @click="copyAssetPath(asset.resolved)"
+                  class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                  title="复制绝对路径"
+                >📋 复制路径</button>
+                <button
+                  @click="copyAssetPath(asset.raw)"
+                  class="text-xs px-2 py-0.5 rounded border border-gray-200 dark:border-gray-600 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+                  title="复制 Markdown 引用(原始写法)"
+                >🔗 复制引用</button>
+                <button
+                  v-if="asset.exists"
+                  @click="removeAssetReference(asset.raw)"
+                  class="text-xs px-2 py-0.5 rounded border border-red-200 dark:border-red-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 ml-auto"
+                  title="从文档中移除此引用"
+                >✕</button>
+              </div>
+              <div v-if="!asset.exists" class="text-xs text-red-500 mt-1">⚠️ 文件不存在</div>
+            </div>
+          </div>
         </div>
         <div
           class="w-1 cursor-ew-resize hover:bg-blue-400"
@@ -2066,6 +3025,7 @@ onUnmounted(() => {
             :value="activeTab?.content"
             @input="handleInput"
             @keydown="handleKeydown"
+            @paste="handlePaste"
             class="editor-input dark:text-gray-200"
             placeholder="开始写作..."
           ></textarea>
@@ -2081,6 +3041,7 @@ onUnmounted(() => {
               :value="activeTab?.content"
               @input="handleInput"
               @keydown="handleKeydown"
+              @paste="handlePaste"
               class="editor-input dark:text-gray-200"
               placeholder="开始写作..."
             ></textarea>
@@ -2253,5 +3214,308 @@ onUnmounted(() => {
 }
 .dark .preview-area {
   border-color: #374151;
+}
+
+/* 图片交互(v-html 注入的子节点,需用 :deep 穿透) */
+:deep(.ink-image-wrap) {
+  position: relative;
+  display: block;
+  margin: 0.5em 0;
+}
+:deep(.ink-image-wrap:hover) :deep(.ink-image-toolbar) {
+  opacity: 1;
+  pointer-events: auto;
+}
+:deep(.ink-image-toolbar) {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  font-size: 12px;
+  z-index: 5;
+  user-select: none;
+}
+.dark :deep(.ink-image-toolbar) {
+  background: rgba(31, 41, 55, 0.95);
+  border-color: #4b5563;
+  color: #e5e7eb;
+}
+:deep(.ink-image-toolbar button) {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: inherit;
+}
+:deep(.ink-image-toolbar button:hover) {
+  background: rgba(59, 130, 246, 0.15);
+}
+:deep(.ink-image-scale) {
+  padding: 0 4px;
+  min-width: 38px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #6b7280;
+}
+.dark :deep(.ink-image-scale) {
+  color: #9ca3af;
+}
+:deep(.ink-image-sep) {
+  width: 1px;
+  height: 14px;
+  background: #d1d5db;
+  margin: 0 2px;
+}
+.dark :deep(.ink-image-sep) {
+  background: #4b5563;
+}
+
+/* 目录([[toc]]) */
+:deep(.ink-toc) {
+  display: block;
+  padding: 0.75em 1em;
+  margin: 1em 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f9fafb;
+  font-size: 0.95em;
+}
+.dark :deep(.ink-toc) {
+  border-color: #374151;
+  background: #1f2937;
+}
+:deep(.ink-toc-title) {
+  font-weight: 600;
+  margin-bottom: 0.5em;
+  color: #6b7280;
+  font-size: 0.85em;
+  letter-spacing: 0.05em;
+}
+:deep(.ink-toc ul) {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+:deep(.ink-toc ul ul) {
+  padding-left: 1.2em;
+  margin: 0.2em 0;
+}
+:deep(.ink-toc li) {
+  margin: 0.2em 0;
+}
+:deep(.ink-toc a) {
+  color: #2563eb;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+}
+:deep(.ink-toc a:hover) {
+  border-bottom-color: #2563eb;
+}
+.dark :deep(.ink-toc a) {
+  color: #93c5fd;
+}
+.dark :deep(.ink-toc a:hover) {
+  border-bottom-color: #93c5fd;
+}
+:deep(.ink-toc-empty) {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+/* 代码块工具栏 */
+:deep(.ink-codeblock) {
+  position: relative;
+  margin: 1em 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+.dark :deep(.ink-codeblock) {
+  border-color: #374151;
+}
+:deep(.ink-codeblock-toolbar) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+  user-select: none;
+}
+.dark :deep(.ink-codeblock-toolbar) {
+  background: #1f2937;
+  border-bottom-color: #374151;
+}
+:deep(.ink-codeblock-lang) {
+  color: #6b7280;
+  text-transform: lowercase;
+  font-family: ui-monospace, monospace;
+}
+.dark :deep(.ink-codeblock-lang) {
+  color: #9ca3af;
+}
+:deep(.ink-codeblock-copy) {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+:deep(.ink-codeblock-copy:hover) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+:deep(.ink-codeblock-copy.copied) {
+  background: #10b981;
+  color: #fff;
+  border-color: #10b981;
+}
+.dark :deep(.ink-codeblock-copy) {
+  background: #374151;
+  color: #e5e7eb;
+  border-color: #4b5563;
+}
+.dark :deep(.ink-codeblock-copy:hover) {
+  background: #4b5563;
+  border-color: #6b7280;
+}
+:deep(.ink-codeblock-body) {
+  display: block;
+}
+:deep(.ink-codeblock pre) {
+  margin: 0;
+  border-radius: 0;
+  border: none;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  padding: 0;
+  line-height: 1.5;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+:deep(.ink-codeblock pre code) {
+  display: block;
+  flex: 1 1 auto;
+  padding: 1em 1em 1em 0.6em;
+  margin: 0;
+  background: transparent;
+  white-space: pre;
+  overflow-x: auto;
+}
+:deep(.ink-codeblock .line) {
+  display: block;
+  min-height: 1.5em;
+}
+:deep(.ink-codeblock .ink-line-nums) {
+  list-style: none;
+  margin: 0;
+  padding: 1em 0.5em 1em 1em;
+  text-align: right;
+  color: #9ca3af;
+  user-select: none;
+  background: rgba(0, 0, 0, 0.04);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  flex: 0 0 auto;
+}
+.dark :deep(.ink-codeblock .ink-line-nums) {
+  background: rgba(255, 255, 255, 0.04);
+  border-right-color: rgba(255, 255, 255, 0.06);
+  color: #6b7280;
+}
+:deep(.ink-codeblock .ink-line-nums li) {
+  font-size: 0.85em;
+}
+
+/* 表格工具栏 */
+:deep(.ink-table) {
+  position: relative;
+  margin: 1em 0;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+}
+.dark :deep(.ink-table) {
+  border-color: #374151;
+}
+:deep(.ink-table-toolbar) {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+  user-select: none;
+  flex-wrap: wrap;
+}
+.dark :deep(.ink-table-toolbar) {
+  background: #1f2937;
+  border-bottom-color: #374151;
+}
+:deep(.ink-table-toolbar button) {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+:deep(.ink-table-toolbar button:hover) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+:deep(.ink-table-toolbar button.copied) {
+  background: #10b981;
+  color: #fff;
+  border-color: #10b981;
+}
+.dark :deep(.ink-table-toolbar button) {
+  background: #374151;
+  color: #e5e7eb;
+  border-color: #4b5563;
+}
+.dark :deep(.ink-table-toolbar button:hover) {
+  background: #4b5563;
+  border-color: #6b7280;
+}
+:deep(.ink-table table) {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+:deep(.ink-table[data-edit="true"]) :deep(th),
+:deep(.ink-table[data-edit="true"]) :deep(td) {
+  outline: 1px dashed #93c5fd;
+  outline-offset: -1px;
+  background: rgba(59, 130, 246, 0.04);
+  cursor: text;
+}
+:deep(.ink-table[data-edit="true"]) :deep(th:focus),
+:deep(.ink-table[data-edit="true"]) :deep(td:focus) {
+  outline: 2px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
 }
 </style>

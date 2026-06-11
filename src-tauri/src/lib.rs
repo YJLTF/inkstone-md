@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
-    Emitter, Manager,
+    AppHandle, Emitter, Listener, Manager,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -156,11 +156,166 @@ fn delete_path(path: &str) -> Result<(), String> {
     }
 }
 
+/// 在系统文件管理器中"显示"该路径(Win: explorer /select,mac: open -R,linux: xdg-open 父目录)
+#[tauri::command]
+fn reveal_in_folder(path: &str) -> Result<(), String> {
+    let p = Path::new(path);
+    if !p.exists() {
+        return Err("路径不存在".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // explorer /select,"<path>"  会聚焦到该文件;空格 / 中文路径用 arg 自动加引号
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path))
+            .spawn()
+            .map_err(|e| format!("explorer 启动失败: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", path])
+            .spawn()
+            .map_err(|e| format!("open 启动失败: {}", e))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let parent = p.parent().unwrap_or(Path::new("/"));
+        std::process::Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .map_err(|e| format!("xdg-open 启动失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 压缩图片:读取 src,按 format(jpeg/png)+ quality(仅 jpeg)重新编码到 dest。
+/// 返回压缩后文件的字节数。
+#[tauri::command]
+fn compress_image(
+    src: &str,
+    dest: &str,
+    format: &str,
+    quality: u8,
+) -> Result<u64, String> {
+    use image::codecs::jpeg::JpegEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+    use image::{ExtendedColorType, ImageEncoder, ImageReader};
+    use std::fs::File;
+    use std::io::BufWriter;
+
+    let img = ImageReader::open(src)
+        .map_err(|e| format!("打开失败: {}", e))?
+        .with_guessed_format()
+        .map_err(|e| format!("读取格式失败: {}", e))?
+        .decode()
+        .map_err(|e| format!("解码失败: {}", e))?;
+
+    if let Some(parent) = std::path::Path::new(dest).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    let file = File::create(dest).map_err(|e| format!("创建目标失败: {}", e))?;
+    let mut writer = BufWriter::new(file);
+    let fmt = format.to_lowercase();
+    match fmt.as_str() {
+        "jpeg" | "jpg" => {
+            let rgb = img.to_rgb8();
+            let enc = JpegEncoder::new_with_quality(&mut writer, quality);
+            enc.write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| format!("JPEG 编码失败: {}", e))?;
+        }
+        "png" => {
+            let rgba = img.to_rgba8();
+            let enc = PngEncoder::new_with_quality(
+                &mut writer,
+                CompressionType::Default,
+                FilterType::Adaptive,
+            );
+            enc.write_image(
+                rgba.as_raw(),
+                rgba.width(),
+                rgba.height(),
+                ExtendedColorType::Rgba8,
+            )
+            .map_err(|e| format!("PNG 编码失败: {}", e))?;
+        }
+        _ => return Err(format!("不支持的格式: {}", format)),
+    }
+    drop(writer);
+    let size = std::fs::metadata(dest).map_err(|e| e.to_string())?.len();
+    Ok(size)
+}
+
+/// 启动时携带的待打开文件,挂在 App state,等前端发 `frontend-ready` 时再下发。
+struct StartupFile(Option<String>);
+
+/// 解析一组命令行参数,找到第一个存在的、扩展名匹配的 markdown / 文本文件。
+fn pick_openable_path<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    for arg in args.into_iter().skip(1) {
+        let a = arg.as_ref();
+        if a.is_empty() {
+            continue;
+        }
+        // 跳过明显是 flag 的项(以 "-" 开头)
+        if a.starts_with('-') {
+            continue;
+        }
+        let lower = a.to_lowercase();
+        if !(lower.ends_with(".md")
+            || lower.ends_with(".markdown")
+            || lower.ends_with(".txt"))
+        {
+            continue;
+        }
+        if Path::new(a).exists() {
+            return Some(a.to_string());
+        }
+    }
+    None
+}
+
+/// 真正把文件路径派发给前端:聚焦主窗口后 emit `open-file`。
+/// 若主窗口尚未就绪,会先尝试显示窗口。
+fn dispatch_open_file(app: &AppHandle, path: String) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        let _ = app.emit("open-file", path);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例插件必须放在最前面
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = pick_openable_path(argv) {
+                dispatch_open_file(app, path);
+            } else {
+                // 没有拿到文件路径,只把窗口前置
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .manage(StartupFile(pick_openable_path(std::env::args().collect::<Vec<_>>())))
         .invoke_handler(tauri::generate_handler![
             read_file,
             write_file,
@@ -171,32 +326,24 @@ pub fn run() {
             create_file,
             create_directory,
             rename_path,
-            delete_path
+            delete_path,
+            reveal_in_folder,
+            compress_image,
+            frontend_ready,
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             window.set_title("InkStone MD").unwrap();
 
-            // 获取命令行参数，检查是否有 .md 文件需要打开
-            let args: Vec<String> = std::env::args().collect();
-            if args.len() > 1 {
-                let file_path = args[1].clone();
-                // 检查文件是否是 .md 结尾且存在
-                if file_path.to_lowercase().ends_with(".md")
-                    || file_path.to_lowercase().ends_with(".markdown")
-                    || file_path.to_lowercase().ends_with(".txt")
-                {
-                    if std::path::Path::new(&file_path).exists() {
-                        // 延迟发送事件，确保前端已准备好监听
-                        let w = window.clone();
-                        let fp = file_path.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            let _ = w.emit("open-file-init", fp);
-                        });
+            // 注册运行时事件:前端发出 `frontend-ready` 后,把启动时挂起的文件下发
+            let app_handle = app.handle().clone();
+            app.listen("frontend-ready", move |_| {
+                if let Some(state) = app_handle.try_state::<StartupFile>() {
+                    if let Some(path) = state.0.clone() {
+                        dispatch_open_file(&app_handle, path);
                     }
                 }
-            }
+            });
 
             let file_menu = Submenu::with_items(
                 app,
@@ -242,6 +389,33 @@ pub fn run() {
             let id = event.id().as_ref();
             window.emit("menu-event", id).unwrap();
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, _event| {
+            // macOS / iOS / Android:通过 OS 打开文件的事件
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "android"))]
+            {
+                use tauri::RunEvent;
+                if let RunEvent::Opened { ref urls } = _event {
+                    for url in urls {
+                        if let Ok(p) = url.to_file_path() {
+                            if let Some(s) = p.to_str() {
+                                dispatch_open_file(_app_handle, s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = (_app_handle, _event);
+        });
+}
+
+/// 前端通知后端"已挂载完成,可以下发启动参数文件"。
+#[tauri::command]
+fn frontend_ready(app: AppHandle) {
+    if let Some(state) = app.try_state::<StartupFile>() {
+        if let Some(path) = state.0.clone() {
+            dispatch_open_file(&app, path);
+        }
+    }
 }
