@@ -2399,19 +2399,43 @@ function toggleScrollSync() {
   }
 }
 
+// 获取当前可见的编辑器 textarea（v-show 隐藏父 div，textarea 本身无 display:none 内联样式）
+function getVisibleEditor(): HTMLTextAreaElement | null {
+  const textareas = document.querySelectorAll<HTMLTextAreaElement>('.editor-input');
+  for (const ta of textareas) {
+    if (ta.offsetParent !== null) return ta;
+  }
+  return textareas[0] || null;
+}
+
+// 获取当前可见的预览区
+function getVisiblePreview(): HTMLElement | null {
+  const previews = document.querySelectorAll<HTMLElement>('.preview-area');
+  for (const p of previews) {
+    if (p.offsetParent !== null) return p;
+  }
+  return previews[0] || null;
+}
+
 // 编辑器滚动 -> 同步预览
 function syncPreviewFromEditor() {
   if (!scrollSync.value || !showSplit.value) return;
   if (syncingFrom === 'preview') return;
   syncingFrom = 'editor';
-  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
-  const preview = document.querySelector('.preview-area:not([style*="display: none"])') as HTMLElement;
+  const textarea = getVisibleEditor();
+  const preview = getVisiblePreview();
   if (!textarea || !preview) {
     syncingFrom = null;
     return;
   }
-  const ratio = textarea.scrollTop / Math.max(1, textarea.scrollHeight - textarea.clientHeight);
-  preview.scrollTop = ratio * Math.max(0, preview.scrollHeight - preview.clientHeight);
+  const editorMax = textarea.scrollHeight - textarea.clientHeight;
+  const previewMax = preview.scrollHeight - preview.clientHeight;
+  if (editorMax <= 0 || previewMax <= 0) {
+    setTimeout(() => { syncingFrom = null; }, 80);
+    return;
+  }
+  const ratio = textarea.scrollTop / editorMax;
+  preview.scrollTop = ratio * previewMax;
   setTimeout(() => { syncingFrom = null; }, 80);
 }
 
@@ -2420,21 +2444,27 @@ function syncEditorFromPreview() {
   if (!scrollSync.value || !showSplit.value) return;
   if (syncingFrom === 'editor') return;
   syncingFrom = 'preview';
-  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
-  const preview = document.querySelector('.preview-area:not([style*="display: none"])') as HTMLElement;
+  const textarea = getVisibleEditor();
+  const preview = getVisiblePreview();
   if (!textarea || !preview) {
     syncingFrom = null;
     return;
   }
-  const ratio = preview.scrollTop / Math.max(1, preview.scrollHeight - preview.clientHeight);
-  textarea.scrollTop = ratio * Math.max(0, textarea.scrollHeight - textarea.clientHeight);
+  const editorMax = textarea.scrollHeight - textarea.clientHeight;
+  const previewMax = preview.scrollHeight - preview.clientHeight;
+  if (editorMax <= 0 || previewMax <= 0) {
+    setTimeout(() => { syncingFrom = null; }, 80);
+    return;
+  }
+  const ratio = preview.scrollTop / previewMax;
+  textarea.scrollTop = ratio * editorMax;
   updateActiveHeadingFromScroll();
   setTimeout(() => { syncingFrom = null; }, 80);
 }
 
 // 根据预览滚动位置更新当前激活的大纲项
 function updateActiveHeadingFromScroll() {
-  const preview = document.querySelector('.preview-area:not([style*="display: none"])') as HTMLElement;
+  const preview = getVisiblePreview();
   if (!preview) return;
   const headEls = preview.querySelectorAll<HTMLElement>('.ink-heading');
   if (headEls.length === 0) return;
