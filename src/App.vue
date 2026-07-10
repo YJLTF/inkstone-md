@@ -26,21 +26,12 @@ import {
   Sun, Moon, MoreHorizontal, Feather,
 } from "@lucide/vue";
 
-interface FileEntry {
-  name: string;
-  path: string;
-  is_dir: boolean;
-  is_open: boolean;
-  children?: FileEntry[];
-}
-
-interface Tab {
-  id: string;
-  name: string;
-  path: string | null;
-  content: string;
-  saved: boolean;
-}
+import type { FileEntry, Tab, Heading, ThemeName, ViewMode, ContextMenuState, RenamingState, DocumentAsset, ImageAlign, SidebarMode, ThemeOption } from './types';
+import { isAbsolutePath, posixNormalize, slugify, escapeHtml, formatBytes, getFileName, getMimeFromExt, bytesToBase64, fetchAsDataUri } from './utils';
+import ShortcutsModal from './components/ShortcutsModal.vue';
+import AboutModal from './components/AboutModal.vue';
+import PrintHint from './components/PrintHint.vue';
+import TheStatusBar from './components/TheStatusBar.vue';
 
 const md = new MarkdownIt({
   html: true,
@@ -112,19 +103,12 @@ const tabs = ref<Tab[]>([{
 }]);
 const activeTabId = ref(tabs.value[0].id);
 
-interface Heading {
-  level: number;
-  text: string;
-  line: number;
-}
-
 const showSidebar = ref(false);
-const sidebarMode = ref<'tree' | 'outline' | 'recent' | 'assets'>('outline');
+const sidebarMode = ref<SidebarMode>('outline');
 const sidebarWidth = ref(280); // 增加默认宽度以容纳按钮
 const isResizing = ref(false);
 const isDark = ref(localStorage.getItem('isDark') === 'true');
-type ThemeName = "inkstone" | "github" | "onedark" | "typora";
-const THEME_OPTIONS: { value: ThemeName; label: string; forceDark?: boolean }[] = [
+const THEME_OPTIONS: ThemeOption[] = [
   { value: "inkstone", label: "InkStone" },
   { value: "github", label: "GitHub" },
   { value: "onedark", label: "One Dark", forceDark: true },
@@ -152,7 +136,6 @@ function setTheme(name: ThemeName) {
     nextTick(() => renderMermaidDiagrams());
   }
 }
-type ViewMode = 'edit' | 'split' | 'preview';
 const viewMode = ref<ViewMode>((localStorage.getItem('viewMode') as ViewMode) || 'split');
 // 由 viewMode 派生的布尔值,保持模板/下游读取不变(只读,不可直接赋值)
 const showSplit = computed(() => viewMode.value === 'split');
@@ -182,13 +165,6 @@ const fileTree = ref<FileEntry[]>([]);
 const autoSaveInterval = ref<number | null>(null);
 
 // 右键菜单状态
-interface ContextMenuState {
-  visible: boolean;
-  x: number;
-  y: number;
-  target: FileEntry | null;
-  parentPath: string | null;
-}
 const contextMenu = ref<ContextMenuState>({
   visible: false,
   x: 0,
@@ -198,12 +174,7 @@ const contextMenu = ref<ContextMenuState>({
 });
 
 // 重命名状态
-const renaming = ref<{
-  active: boolean;
-  path: string;
-  originalName: string;
-  input: string;
-}>({
+const renaming = ref<RenamingState>({
   active: false,
   path: '',
   originalName: '',
@@ -245,13 +216,6 @@ function clearRecentFiles() {
 }
 
 // 当前文档中引用的资源(图为主)列表
-interface DocumentAsset {
-  raw: string;
-  name: string;
-  relative: string;
-  resolved: string;
-  exists: boolean;
-}
 
 const assetExistsCache = new Map<string, boolean>();
 
@@ -428,11 +392,6 @@ async function getFileSize(p: string): Promise<number> {
   }
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
 
 async function compressAsset(asset: DocumentAsset) {
   if (isRemoteAsset(asset.raw)) {
@@ -505,9 +464,6 @@ async function compressAsset(asset: DocumentAsset) {
   }
 }
 
-function getFileName(path: string): string {
-  return path.split(/[/\\]/).pop() ?? path;
-}
 
 // 拖拽状态
 const isDragging = ref(false);
@@ -610,23 +566,7 @@ const selectedCount = ref(0);
 // ---- 图片路径预处理 / 工具栏包装 ----
 
 const IMAGE_SCALES = [25, 50, 75, 100] as const;
-type ImageAlign = "left" | "center" | "right";
 
-function isAbsolutePath(p: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("\\\\") || p.startsWith("/");
-}
-
-function posixNormalize(p: string): string {
-  const isAbs = p.startsWith("/");
-  const parts = p.split("/");
-  const out: string[] = [];
-  for (const part of parts) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") out.pop();
-    else out.push(part);
-  }
-  return (isAbs ? "/" : "") + out.join("/");
-}
 
 function toTauriAssetUrl(src: string, currentFilePath: string | null): string {
   if (/^(https?:|data:|blob:|tauri:|asset:)/i.test(src)) return src;
@@ -701,22 +641,6 @@ function preprocessToc(content: string, heads: Heading[]): string {
   );
 }
 
-function slugify(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w\u4e00-\u9fa5-]/g, '')
-    .replace(/-+/g, '-');
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 function addHeadingIds(html: string, heads: Heading[]): string {
   const used = new Map<string, number>();
@@ -1987,45 +1911,6 @@ function captureCurrentTheme(): {
   };
 }
 
-function getMimeFromExt(ext: string): string {
-  const map: Record<string, string> = {
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    gif: "image/gif",
-    webp: "image/webp",
-    svg: "image/svg+xml",
-    bmp: "image/bmp",
-    ico: "image/x-icon",
-  };
-  return map[ext.toLowerCase()] || "application/octet-stream";
-}
-
-function bytesToBase64(bytes: number[]): string {
-  const arr = new Uint8Array(bytes);
-  let binary = "";
-  const chunk = 8192;
-  for (let i = 0; i < arr.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, Array.from(arr.subarray(i, i + chunk)));
-  }
-  return btoa(binary);
-}
-
-async function fetchAsDataUri(url: string): Promise<string | null> {
-  try {
-    const resp = await fetch(url, { mode: "cors" });
-    if (!resp.ok) return null;
-    const blob = await resp.blob();
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 把 markdown 中的本地图片内联为 data URI(base64),网络图片尝试 fetch 内联。
@@ -3187,17 +3072,8 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- PDF 打印提示(首次使用弹一次,后写入 localStorage 不再弹) -->
-    <div v-if="showPrintHint" class="print-hint" role="alert">
-      <Printer :size="18" class="print-hint-icon" />
-      <div class="print-hint-body flex-1">
-        <strong>PDF 导出说明</strong>
-        系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>(Win10/11 自带)即可另存为 PDF。文字可选可搜索,样式与预览完全一致。建议在「更多设置」中关闭<strong>页眉和页脚</strong>,以获得不含日期和标题的纯净 PDF。
-      </div>
-      <button @click="dismissPrintHint" class="print-hint-close" title="知道了">
-        <X :size="14" />
-      </button>
-    </div>
+    <!-- PDF 打印提示 -->
+    <PrintHint :visible="showPrintHint" @dismiss="dismissPrintHint" />
 
     <!-- Search Panel -->
     <div
@@ -3515,78 +3391,22 @@ onUnmounted(() => {
     </div>
 
     <!-- Status Bar -->
-    <div class="flex items-center gap-4 px-4 py-1 text-xs border-t bg-gray-50 dark:bg-gray-900 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-      <span :class="activeTab?.saved ? 'text-green-500' : 'text-orange-500'">
-        {{ activeTab?.saved ? '✓ 已保存' : '● 未保存' }}
-      </span>
-      <span class="truncate max-w-48" :title="activeTab?.path || '未命名文档'">
-        {{ activeTab?.path ? activeTab.path.split(/[/\\]/).pop() : '未命名文档' }}
-      </span>
-      <span>{{ charCount }} 字符</span>
-      <span>{{ wordCount }} 词</span>
-      <span v-if="selectedCount > 0" class="text-blue-500">选中 {{ selectedCount }} 字</span>
-      <span
-        v-if="showSplit"
-        @click="toggleScrollSync"
-        :class="scrollSync ? 'text-blue-500 cursor-pointer hover:text-blue-600' : 'text-gray-400 dark:text-gray-500 cursor-pointer hover:text-gray-500 dark:hover:text-gray-400'"
-        :title="scrollSync ? '滚动同步已开启 (F7)' : '滚动同步已暂停 (F7)'"
-      >🔗 {{ scrollSync ? '同步' : '已暂停' }}</span>
-      <span class="ml-auto text-gray-400 dark:text-gray-500">自动保存: 30s</span>
-    </div>
+    <TheStatusBar
+      :saved="!!activeTab?.saved"
+      :path="activeTab?.path ?? null"
+      :char-count="charCount"
+      :word-count="wordCount"
+      :selected-count="selectedCount"
+      :show-split="showSplit"
+      :scroll-sync="scrollSync"
+      @toggle-scroll-sync="toggleScrollSync"
+    />
 
     <!-- 快捷键对话框 -->
-    <div
-      v-if="showShortcutsModal"
-      class="modal-overlay"
-      @click.self="showShortcutsModal = false"
-    >
-      <div class="modal-card">
-        <div class="modal-header">
-          <h3>快捷键</h3>
-          <button class="modal-close" title="关闭 (Esc)" @click="showShortcutsModal = false">
-            <X :size="16" />
-          </button>
-        </div>
-        <div class="modal-body">
-          <table class="shortcuts-table">
-            <thead>
-              <tr><th>分组</th><th>快捷键</th><th>功能</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="(s, i) in SHORTCUTS" :key="i">
-                <td class="text-gray-500 dark:text-gray-400">{{ s.group }}</td>
-                <td><code>{{ s.key }}</code></td>
-                <td>{{ s.desc }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+    <ShortcutsModal v-model="showShortcutsModal" :shortcuts="SHORTCUTS" />
 
     <!-- 关于对话框 -->
-    <div
-      v-if="showAboutModal"
-      class="modal-overlay"
-      @click.self="showAboutModal = false"
-    >
-      <div class="modal-card about-card">
-        <div class="modal-header">
-          <h3>关于 InkStone MD</h3>
-          <button class="modal-close" title="关闭 (Esc)" @click="showAboutModal = false">
-            <X :size="16" />
-          </button>
-        </div>
-        <div class="modal-body about-body">
-          <div class="about-logo"><Feather :size="40" /></div>
-          <div class="about-name">InkStone MD</div>
-          <div class="about-version">版本 {{ appVersion }}</div>
-          <p class="about-desc">轻量、优雅的桌面 Markdown 编辑器</p>
-          <p class="about-meta">技术栈: Tauri 2 + Vue 3</p>
-          <p class="about-meta">许可证: GPL-3.0</p>
-        </div>
-      </div>
-    </div>
+    <AboutModal v-model="showAboutModal" :version="appVersion" />
   </div>
 </template>
 
@@ -3800,66 +3620,6 @@ onUnmounted(() => {
 .dark .overflow-menu-item:hover {
   background: rgba(255, 255, 255, 0.06);
 }
-
-/* 打印提示横幅 */
-.print-hint {
-  position: fixed;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  max-width: 480px;
-  padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  color: #374151;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.print-hint-icon {
-  color: #2563eb;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.print-hint-body strong {
-  color: #111827;
-  display: block;
-  margin-bottom: 2px;
-}
-.print-hint-close {
-  background: transparent;
-  border: none;
-  color: #9ca3af;
-  cursor: pointer;
-  padding: 2px;
-  border-radius: 4px;
-  transition: background-color 100ms ease, color 100ms ease;
-}
-.print-hint-close:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #374151;
-}
-.dark .print-hint {
-  background: #1f2937;
-  border-color: #374151;
-  color: #d1d5db;
-}
-.dark .print-hint-body strong { color: #f3f4f6; }
-.dark .print-hint-close { color: #6b7280; }
-.dark .print-hint-close:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #d1d5db;
-}
-@keyframes print-hint-in {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-.print-hint { animation: print-hint-in 200ms ease-out; }
 
 /* Tab 栏 */
 .tab-icon-btn {
@@ -4367,137 +4127,5 @@ onUnmounted(() => {
 :deep(.ink-table[data-edit="true"]) :deep(td:focus) {
   outline: 2px solid #3b82f6;
   background: rgba(59, 130, 246, 0.08);
-}
-
-/* 通用对话框样式 */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-.modal-card {
-  background: #fff;
-  color: #1f2937;
-  border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
-  width: 520px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 64px);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.dark .modal-card {
-  background: #1f2937;
-  color: #e5e7eb;
-}
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-}
-.dark .modal-header {
-  border-color: #374151;
-}
-.modal-header h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0;
-}
-.modal-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  border-radius: 6px;
-}
-.modal-close:hover {
-  background: rgba(127, 127, 127, 0.15);
-}
-.modal-body {
-  padding: 16px;
-  overflow-y: auto;
-}
-
-/* 快捷键表格 */
-.shortcuts-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.shortcuts-table th,
-.shortcuts-table td {
-  text-align: left;
-  padding: 7px 10px;
-  border-bottom: 1px solid #e5e7eb;
-}
-.dark .shortcuts-table th,
-.dark .shortcuts-table td {
-  border-color: #374151;
-}
-.shortcuts-table th {
-  font-weight: 600;
-  color: #6b7280;
-}
-.dark .shortcuts-table th {
-  color: #9ca3af;
-}
-.shortcuts-table code {
-  background: rgba(127, 127, 127, 0.12);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-/* 关于对话框 */
-.about-card {
-  width: 380px;
-}
-.about-body {
-  text-align: center;
-  padding: 28px 20px;
-}
-.about-logo {
-  color: #3b82f6;
-  margin-bottom: 10px;
-}
-.dark .about-logo {
-  color: #60a5fa;
-}
-.about-name {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-.about-version {
-  font-size: 13px;
-  color: #6b7280;
-  margin-bottom: 14px;
-}
-.dark .about-version {
-  color: #9ca3af;
-}
-.about-desc {
-  font-size: 13px;
-  margin: 6px 0;
-}
-.about-meta {
-  font-size: 12px;
-  color: #6b7280;
-  margin: 4px 0;
-}
-.dark .about-meta {
-  color: #9ca3af;
 }
 </style>
