@@ -155,6 +155,9 @@ function setTheme(name: ThemeName) {
 const showPreview = ref(false);
 const showSplit = ref(true);
 const typewriterMode = ref(localStorage.getItem('typewriterMode') === 'true');
+const scrollSync = ref(localStorage.getItem('scrollSync') !== 'false');
+let syncingFrom: 'editor' | 'preview' | null = null;
+const activeHeadingIndex = ref(-1);
 
 const toolbarRef = ref<HTMLElement | null>(null);
 const overflowLevel = ref<0 | 1 | 2>(0);
@@ -691,6 +694,22 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+function addHeadingIds(html: string, heads: Heading[]): string {
+  const used = new Map<string, number>();
+  const slugList = heads.map((h) => {
+    const base = slugify(h.text);
+    const count = used.get(base) ?? 0;
+    used.set(base, count + 1);
+    return count === 0 ? base : `${base}-${count + 1}`;
+  });
+  let idx = 0;
+  return html.replace(/<h([1-6])>/g, (_m, level) => {
+    if (idx >= slugList.length) return `<h${level}>`;
+    const id = slugList[idx++];
+    return `<h${level} id="${id}" class="ink-heading">`;
+  });
+}
+
 /**
  * 把渲染后的 <img> 包成可交互结构:
  *   <span class="ink-image-wrap" data-scale="100" data-align="center">
@@ -1082,6 +1101,8 @@ const renderedHTML = computed(() => {
   const pre1 = preprocessImageSrcs(activeTab.value.content, activeTab.value.path);
   const pre2 = preprocessToc(pre1, headings.value);
   let html = md.render(pre2);
+
+  html = addHeadingIds(html, headings.value);
 
   // 先处理块级公式（多行 $...$）
   html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
@@ -1844,6 +1865,10 @@ function insertHeading(level: number) {
 }
 
 function jumpToHeading(line: number) {
+  navigateToHeading(line);
+}
+
+function navigateToHeading(line: number) {
   const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
   if (!textarea || !activeTab.value) return;
 
@@ -1855,6 +1880,34 @@ function jumpToHeading(line: number) {
 
   textarea.focus();
   textarea.setSelectionRange(pos, pos);
+
+  const headingText = (lines[line - 1] || '').replace(/^#{1,6}\s+/, '');
+  if (!headingText) return;
+
+  const slug = slugify(headingText);
+  const previews = document.querySelectorAll<HTMLElement>('.preview-area:not([style*="display: none"])');
+  previews.forEach((preview) => {
+    let target = preview.querySelector<HTMLElement>(`#${CSS.escape(slug)}`);
+    if (!target) {
+      const headings = preview.querySelectorAll<HTMLElement>('.ink-heading');
+      for (const h of headings) {
+        if (slugify(h.textContent || '') === slug) {
+          target = h;
+          break;
+        }
+      }
+    }
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      target.classList.add('ink-heading-highlight');
+      setTimeout(() => target?.classList.remove('ink-heading-highlight'), 2000);
+    }
+  });
+
+  const headIdx = headings.value.findIndex((h) => h.line === line);
+  if (headIdx >= 0) {
+    activeHeadingIndex.value = headIdx;
+  }
 }
 
 // ========= 导出相关(V1.1.0 重做) =========
@@ -2037,7 +2090,7 @@ function renderHTMLForExport(source: string): string {
 
 const EXPORT_BASE_CSS = `
 :root {
-  font-family: var(--ink-font, 'Segoe UI', system-ui, sans-serif);
+  font-family: var(--ink-font, 'Segoe UI', system-ui, -apple-system, 'Microsoft YaHei', 'PingFang SC', sans-serif);
   font-size: 16px;
   line-height: 1.7;
   color: var(--ink-fg, #1a1a1a);
@@ -2047,87 +2100,146 @@ const EXPORT_BASE_CSS = `
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { padding: 2rem 1.5rem; }
-.markdown-body { max-width: 800px; margin: 0 auto; }
-.markdown-body h1 { font-size: 2em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; margin: 1em 0; }
-.markdown-body h2 { font-size: 1.5em; border-bottom: 1px solid #eee; padding-bottom: 0.3em; margin: 1em 0; }
-.markdown-body h3 { font-size: 1.25em; margin: 1em 0; }
-.markdown-body h4 { font-size: 1.1em; margin: 1em 0; }
-.markdown-body h5, .markdown-body h6 { font-size: 1em; margin: 1em 0; }
-.markdown-body p { margin: 0.8em 0; }
-.markdown-body ul, .markdown-body ol { margin: 0.8em 0; padding-left: 2em; }
-.markdown-body li { margin: 0.3em 0; }
-.markdown-body code { background: rgba(127,127,127,0.1); padding: 0.2em 0.4em; border-radius: 3px; font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 0.9em; }
-.markdown-body pre { background: rgba(127,127,127,0.08); padding: 1em; border-radius: 6px; overflow-x: auto; margin: 1em 0; }
-.markdown-body pre code { background: transparent; padding: 0; }
-.markdown-body blockquote { border-left: 4px solid #ddd; padding: 0.4em 1em; color: #666; margin: 1em 0; background: rgba(127,127,127,0.04); border-radius: 0 4px 4px 0; }
-.markdown-body table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-.markdown-body th, .markdown-body td { border: 1px solid #ddd; padding: 0.5em 1em; text-align: left; }
-.markdown-body th { background: rgba(127,127,127,0.06); font-weight: 600; }
-.markdown-body a { color: #0366d6; text-decoration: none; }
-.markdown-body a:hover { text-decoration: underline; }
-.markdown-body hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
-.markdown-body img { max-width: 100%; height: auto; margin: 0.8em 0; border-radius: 4px; }
-.markdown-body input[type="checkbox"] { margin-right: 0.5em; }
-.markdown-body .mermaid-diagram { text-align: center; margin: 1em 0; padding: 0.5em; background: rgba(127,127,127,0.04); border-radius: 6px; }
+.markdown-body { max-width: 820px; margin: 0 auto; line-height: 1.7; color: inherit; word-wrap: break-word; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-weight: 600; line-height: 1.3; margin-top: 1.6em; margin-bottom: 0.8em; letter-spacing: -0.01em; scroll-margin-top: 80px; color: inherit;
+}
+.markdown-body h1 { font-size: 2.25em; font-weight: 700; padding-bottom: 0.4em; border-bottom: 2px solid #e5e7eb; margin-top: 0.4em; }
+.markdown-body h2 { font-size: 1.65em; padding-bottom: 0.3em; border-bottom: 1px solid #e5e7eb; }
+.markdown-body h3 { font-size: 1.35em; position: relative; padding-left: 12px; }
+.markdown-body h3::before { content: ''; position: absolute; left: 0; top: 0.25em; bottom: 0.25em; width: 3px; border-radius: 2px; background: #3b82f6; }
+.markdown-body h4 { font-size: 1.1em; color: #374151; }
+.markdown-body h5, .markdown-body h6 { font-size: 1em; color: #6b7280; }
+.markdown-body h1 + p, .markdown-body h2 + p, .markdown-body h3 + p { margin-top: 0.4em; }
+.markdown-body p { margin: 1em 0 1.1em; }
+.markdown-body ul, .markdown-body ol { margin: 1em 0; padding-left: 1.6em; }
+.markdown-body li { margin: 0.4em 0; line-height: 1.7; }
+.markdown-body li > p { margin: 0.4em 0; }
+.markdown-body ul ul, .markdown-body ul ol, .markdown-body ol ul, .markdown-body ol ol { margin: 0.4em 0; }
+.markdown-body ul { list-style: none; padding-left: 1.4em; }
+.markdown-body ul > li { position: relative; padding-left: 0.2em; }
+.markdown-body ul > li::before { content: ''; position: absolute; left: -1em; top: 0.65em; width: 6px; height: 6px; border-radius: 50%; background: #6b7280; }
+.markdown-body ul ul > li::before { width: 5px; height: 5px; background: transparent; border: 1.5px solid #6b7280; }
+.markdown-body ul ul ul > li::before { width: 5px; height: 5px; border-radius: 1px; background: #6b7280; border: none; }
+.markdown-body ol { list-style-type: decimal; }
+.markdown-body ol li::marker { color: #6b7280; font-weight: 500; }
+.markdown-body code { background: rgba(127,127,127,0.1); padding: 0.15em 0.4em; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 0.88em; border: 1px solid rgba(127,127,127,0.12); color: inherit; }
+.markdown-body pre { background: rgba(127,127,127,0.06); padding: 1.2em; border-radius: 8px; overflow-x: auto; margin: 1.2em 0; border: 1px solid rgba(127,127,127,0.1); position: relative; }
+.markdown-body pre code { background: transparent; padding: 0; border: none; font-size: 0.9em; line-height: 1.6; }
+.markdown-body pre .line { display: block; min-height: 1.5em; }
+.markdown-body blockquote { border-left: 4px solid #d1d5db; padding: 0.6em 1.2em; color: #6b7280; margin: 1.2em 0; background: rgba(127,127,127,0.05); border-radius: 0 6px 6px 0; }
+.markdown-body blockquote p { margin: 0.4em 0; }
+.markdown-body blockquote p:first-child { margin-top: 0; }
+.markdown-body blockquote p:last-child { margin-bottom: 0; }
+.markdown-body table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 1.2em 0; border-radius: 6px; overflow: hidden; border: 1px solid #e5e7eb; }
+.markdown-body th, .markdown-body td { padding: 0.6em 1em; text-align: left; border-bottom: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb; }
+.markdown-body th:last-child, .markdown-body td:last-child { border-right: none; }
+.markdown-body tr:last-child td { border-bottom: none; }
+.markdown-body th { background: rgba(127,127,127,0.05); font-weight: 600; border-bottom: 2px solid #d1d5db; }
+.markdown-body tr:nth-child(even) td { background: rgba(127,127,127,0.02); }
+.markdown-body a { color: #2563eb; text-decoration: none; text-underline-offset: 2px; transition: color 0.15s ease; }
+.markdown-body a:hover { color: #1d4ed8; text-decoration: underline; }
+.markdown-body hr { border: none; height: 1px; background: linear-gradient(to right, transparent, #d1d5db, transparent); margin: 2.5em 0; }
+.markdown-body img { max-width: 100%; height: auto; margin: 1em 0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.markdown-body li.task-list-item { list-style: none; position: relative; padding-left: 0.2em; }
+.markdown-body li.task-list-item::before { display: none; }
+.markdown-body li.task-list-item input[type="checkbox"] { position: absolute; left: -1.4em; top: 0.4em; width: 16px; height: 16px; appearance: none; -webkit-appearance: none; border: 1.5px solid #d1d5db; border-radius: 3px; background: #fff; cursor: pointer; transition: all 0.15s ease; }
+.markdown-body li.task-list-item input[type="checkbox"]:checked { background: #3b82f6; border-color: #3b82f6; }
+.markdown-body .mermaid-diagram { text-align: center; margin: 1.2em 0; padding: 1em; background: rgba(127,127,127,0.04); border-radius: 8px; border: 1px solid rgba(127,127,127,0.08); }
 .markdown-body .mermaid-diagram svg { max-width: 100%; height: auto; }
 .markdown-body .mermaid-error { color: #b91c1c; font-size: 0.9em; padding: 0.5em; }
-.katex-display { margin: 1em 0; overflow-x: auto; }
+.katex-display { margin: 1.2em 0; overflow-x: auto; padding: 0.5em 0; }
 
-/* GitHub 主题(light/dark) */
+/* InkStone theme */
+[data-theme="inkstone"] .markdown-body h3::before { background: #3b82f6; }
+
+/* GitHub theme */
 [data-theme="github"] { color: #1f2328; background: #ffffff; }
 [data-theme="github"].dark, .dark[data-theme="github"], html[data-theme="github"].dark { color: #e6edf3; background: #0d1117; }
 [data-theme="github"] .markdown-body h1, [data-theme="github"] .markdown-body h2 { border-bottom-color: #d1d9e0; }
 [data-theme="github"].dark .markdown-body h1, [data-theme="github"].dark .markdown-body h2 { border-bottom-color: #3d444d; }
-[data-theme="github"] .markdown-body code { background: #eff1f3; color: #1f2328; }
-[data-theme="github"].dark .markdown-body code { background: #161b22; color: #e6edf3; }
-[data-theme="github"] .markdown-body pre { background: #f6f8fa; }
-[data-theme="github"].dark .markdown-body pre { background: #161b22; }
+[data-theme="github"] .markdown-body h3::before { background: #0969da; }
+[data-theme="github"].dark .markdown-body h3::before { background: #58a6ff; }
+[data-theme="github"] .markdown-body code { background: #eff1f3; color: #1f2328; border-color: #d1d9e0; }
+[data-theme="github"].dark .markdown-body code { background: #161b22; color: #e6edf3; border-color: #3d444d; }
+[data-theme="github"] .markdown-body pre { background: #f6f8fa; border-color: #d1d9e0; }
+[data-theme="github"].dark .markdown-body pre { background: #161b22; border-color: #3d444d; }
 [data-theme="github"] .markdown-body blockquote { border-left-color: #d1d9e0; color: #59636e; background: #f6f8fa; }
 [data-theme="github"].dark .markdown-body blockquote { border-left-color: #3d444d; color: #9198a1; background: #161b22; }
-[data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body tr:nth-child(even) { background: #f6f8fa; }
-[data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body tr:nth-child(even) { background: #161b22; }
+[data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body tr:nth-child(even) td { background: #f6f8fa; }
+[data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body tr:nth-child(even) td { background: #161b22; }
 [data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body td { border-color: #d1d9e0; }
 [data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body td { border-color: #3d444d; }
+[data-theme="github"] .markdown-body table { border-color: #d1d9e0; }
+[data-theme="github"].dark .markdown-body table { border-color: #3d444d; }
 [data-theme="github"] .markdown-body a { color: #0969da; }
 [data-theme="github"].dark .markdown-body a { color: #58a6ff; }
-[data-theme="github"] .markdown-body hr { border-top-color: #d1d9e0; }
-[data-theme="github"].dark .markdown-body hr { border-top-color: #3d444d; }
+[data-theme="github"] .markdown-body a:hover { color: #0550ae; }
+[data-theme="github"].dark .markdown-body a:hover { color: #79c0ff; }
+[data-theme="github"] .markdown-body hr { background: linear-gradient(to right, transparent, #d1d9e0, transparent); }
+[data-theme="github"].dark .markdown-body hr { background: linear-gradient(to right, transparent, #3d444d, transparent); }
+[data-theme="github"] .markdown-body ul > li::before { background: #59636e; }
+[data-theme="github"].dark .markdown-body ul > li::before { background: #9198a1; }
+[data-theme="github"] .markdown-body ul ul > li::before { border-color: #59636e; }
+[data-theme="github"].dark .markdown-body ul ul > li::before { border-color: #9198a1; }
+[data-theme="github"] .markdown-body ul ul ul > li::before { background: #59636e; }
+[data-theme="github"].dark .markdown-body ul ul ul > li::before { background: #9198a1; }
 
-/* One Dark 主题(强制 dark) */
-[data-theme="onedark"] { color: #abb2bf; background: #282c34; font-family: 'Source Code Pro', 'Cascadia Code', 'Fira Code', Consolas, monospace; }
+/* One Dark theme */
+[data-theme="onedark"] { color: #abb2bf; background: #282c34; font-family: 'Source Code Pro', 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace; }
+[data-theme="onedark"] .markdown-body { line-height: 1.65; }
 [data-theme="onedark"] .markdown-body h1, [data-theme="onedark"] .markdown-body h2 { border-bottom-color: #3e4452; color: #e5c07b; }
 [data-theme="onedark"] .markdown-body h3, [data-theme="onedark"] .markdown-body h4, [data-theme="onedark"] .markdown-body h5, [data-theme="onedark"] .markdown-body h6 { color: #e5c07b; }
-[data-theme="onedark"] .markdown-body code { background: #3e4452; color: #e06c75; }
-[data-theme="onedark"] .markdown-body pre { background: #21252b; color: #abb2bf; }
+[data-theme="onedark"] .markdown-body h3::before { background: #e5c07b; }
+[data-theme="onedark"] .markdown-body code { background: #3e4452; color: #e06c75; border-color: #4b5263; }
+[data-theme="onedark"] .markdown-body pre { background: #21252b; color: #abb2bf; border-color: #3e4452; }
 [data-theme="onedark"] .markdown-body pre code { color: #abb2bf; }
 [data-theme="onedark"] .markdown-body blockquote { border-left-color: #3e4452; color: #7f848e; background: rgba(255,255,255,0.02); }
-[data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body tr:nth-child(even) { background: #21252b; }
+[data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body tr:nth-child(even) td { background: #21252b; }
 [data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body td { border-color: #3e4452; }
+[data-theme="onedark"] .markdown-body table { border-color: #3e4452; }
 [data-theme="onedark"] .markdown-body a { color: #61afef; }
-[data-theme="onedark"] .markdown-body hr { border-top-color: #3e4452; }
+[data-theme="onedark"] .markdown-body a:hover { color: #90caf9; }
+[data-theme="onedark"] .markdown-body hr { background: linear-gradient(to right, transparent, #3e4452, transparent); }
+[data-theme="onedark"] .markdown-body ul > li::before { background: #7f848e; }
+[data-theme="onedark"] .markdown-body ul ul > li::before { border-color: #7f848e; }
+[data-theme="onedark"] .markdown-body ul ul ul > li::before { background: #7f848e; }
+[data-theme="onedark"] .markdown-body .mermaid-diagram { background: #21252b; border-color: #3e4452; }
 
-/* Typora 主题 */
-[data-theme="typora"] { color: #2c2c2c; background: #ffffff; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif; }
-[data-theme="typora"].dark { color: #d0d0d0; background: #1f1f1f; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif; }
-[data-theme="typora"] .markdown-body { max-width: 760px; font-size: 1.05rem; line-height: 1.75; }
-[data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2, [data-theme="typora"] .markdown-body h3, [data-theme="typora"] .markdown-body h4, [data-theme="typora"] .markdown-body h5, [data-theme="typora"] .markdown-body h6 { font-family: inherit; color: #1a1a1a; }
+/* Typora theme */
+[data-theme="typora"] { color: #2c2c2c; background: #ffffff; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', 'SimSun', 'Songti SC', serif; }
+[data-theme="typora"].dark { color: #d0d0d0; background: #1f1f1f; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', 'SimSun', 'Songti SC', serif; }
+[data-theme="typora"] .markdown-body { max-width: 760px; font-size: 1.05rem; line-height: 1.8; }
+[data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2, [data-theme="typora"] .markdown-body h3, [data-theme="typora"] .markdown-body h4, [data-theme="typora"] .markdown-body h5, [data-theme="typora"] .markdown-body h6 { font-family: inherit; color: #1a1a1a; font-weight: 700; }
 [data-theme="typora"].dark .markdown-body h1, [data-theme="typora"].dark .markdown-body h2, [data-theme="typora"].dark .markdown-body h3, [data-theme="typora"].dark .markdown-body h4, [data-theme="typora"].dark .markdown-body h5, [data-theme="typora"].dark .markdown-body h6 { color: #f0f0f0; }
 [data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2 { border-bottom: 1px solid #ececec; }
 [data-theme="typora"].dark .markdown-body h1, [data-theme="typora"].dark .markdown-body h2 { border-bottom-color: #2c2c2c; }
-[data-theme="typora"] .markdown-body code { background: #f4f0ec; color: #b3594a; font-family: 'JetBrains Mono', 'Cascadia Code', monospace; }
-[data-theme="typora"].dark .markdown-body code { background: #2a2a2a; color: #e8a292; }
+[data-theme="typora"] .markdown-body h3::before { background: #b3594a; width: 4px; border-radius: 2px; }
+[data-theme="typora"].dark .markdown-body h3::before { background: #e8a292; }
+[data-theme="typora"] .markdown-body code { background: #f4f0ec; color: #b3594a; font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; border-color: #e8e2db; }
+[data-theme="typora"].dark .markdown-body code { background: #2a2a2a; color: #e8a292; border-color: #3a3a3a; }
 [data-theme="typora"] .markdown-body pre { background: #faf8f5; border: 1px solid #ececec; }
 [data-theme="typora"].dark .markdown-body pre { background: #252525; border-color: #2c2c2c; }
 [data-theme="typora"] .markdown-body blockquote { border-left-color: #c9c2b8; color: #777; font-style: italic; background: transparent; }
-[data-theme="typora"].dark .markdown-body blockquote { border-left-color: #444; color: #999; }
-[data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body tr:nth-child(even) { background: #f4f0ec; }
-[data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body tr:nth-child(even) { background: #2a2a2a; }
+[data-theme="typora"].dark .markdown-body blockquote { border-left-color: #555; color: #aaa; background: transparent; }
+[data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body tr:nth-child(even) td { background: #f4f0ec; }
+[data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body tr:nth-child(even) td { background: #2a2a2a; }
 [data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body td { border-color: #ececec; }
 [data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body td { border-color: #2c2c2c; }
-[data-theme="typora"] .markdown-body a { color: #3b82f6; }
-[data-theme="typora"].dark .markdown-body a { color: #60a5fa; }
-[data-theme="typora"] .markdown-body hr { border-top-color: #ececec; }
-[data-theme="typora"].dark .markdown-body hr { border-top-color: #2c2c2c; }
+[data-theme="typora"] .markdown-body table { border-color: #ececec; }
+[data-theme="typora"].dark .markdown-body table { border-color: #2c2c2c; }
+[data-theme="typora"] .markdown-body a { color: #b3594a; }
+[data-theme="typora"].dark .markdown-body a { color: #e8a292; }
+[data-theme="typora"] .markdown-body a:hover { color: #924a3d; }
+[data-theme="typora"].dark .markdown-body a:hover { color: #f0b8a8; }
+[data-theme="typora"] .markdown-body hr { background: linear-gradient(to right, transparent, #d4cdc4, transparent); }
+[data-theme="typora"].dark .markdown-body hr { background: linear-gradient(to right, transparent, #3a3a3a, transparent); }
+[data-theme="typora"] .markdown-body ul > li::before { background: #8a827a; }
+[data-theme="typora"].dark .markdown-body ul > li::before { background: #888; }
+[data-theme="typora"] .markdown-body ul ul > li::before { border-color: #8a827a; }
+[data-theme="typora"].dark .markdown-body ul ul > li::before { border-color: #888; }
+[data-theme="typora"] .markdown-body ul ul ul > li::before { background: #8a827a; }
+[data-theme="typora"].dark .markdown-body ul ul ul > li::before { background: #888; }
 `;
 
 const PRINT_CSS = `
@@ -2276,6 +2388,70 @@ function toggleFocusMode() {
 function toggleTypewriterMode() {
   typewriterMode.value = !typewriterMode.value;
   localStorage.setItem('typewriterMode', String(typewriterMode.value));
+}
+
+// 滚动同步切换
+function toggleScrollSync() {
+  scrollSync.value = !scrollSync.value;
+  localStorage.setItem('scrollSync', String(scrollSync.value));
+  if (scrollSync.value && showSplit.value) {
+    nextTick(() => syncPreviewFromEditor());
+  }
+}
+
+// 编辑器滚动 -> 同步预览
+function syncPreviewFromEditor() {
+  if (!scrollSync.value || !showSplit.value) return;
+  if (syncingFrom === 'preview') return;
+  syncingFrom = 'editor';
+  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
+  const preview = document.querySelector('.preview-area:not([style*="display: none"])') as HTMLElement;
+  if (!textarea || !preview) {
+    syncingFrom = null;
+    return;
+  }
+  const ratio = textarea.scrollTop / Math.max(1, textarea.scrollHeight - textarea.clientHeight);
+  preview.scrollTop = ratio * Math.max(0, preview.scrollHeight - preview.clientHeight);
+  setTimeout(() => { syncingFrom = null; }, 80);
+}
+
+// 预览滚动 -> 同步编辑器
+function syncEditorFromPreview() {
+  if (!scrollSync.value || !showSplit.value) return;
+  if (syncingFrom === 'editor') return;
+  syncingFrom = 'preview';
+  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
+  const preview = document.querySelector('.preview-area:not([style*="display: none"])') as HTMLElement;
+  if (!textarea || !preview) {
+    syncingFrom = null;
+    return;
+  }
+  const ratio = preview.scrollTop / Math.max(1, preview.scrollHeight - preview.clientHeight);
+  textarea.scrollTop = ratio * Math.max(0, textarea.scrollHeight - textarea.clientHeight);
+  updateActiveHeadingFromScroll();
+  setTimeout(() => { syncingFrom = null; }, 80);
+}
+
+// 根据预览滚动位置更新当前激活的大纲项
+function updateActiveHeadingFromScroll() {
+  const preview = document.querySelector('.preview-area:not([style*="display: none"])') as HTMLElement;
+  if (!preview) return;
+  const headEls = preview.querySelectorAll<HTMLElement>('.ink-heading');
+  if (headEls.length === 0) return;
+  let activeIdx = -1;
+  const offsetTop = 80;
+  for (let i = 0; i < headEls.length; i++) {
+    const rect = headEls[i].getBoundingClientRect();
+    const previewRect = preview.getBoundingClientRect();
+    if (rect.top - previewRect.top - offsetTop <= 0) {
+      activeIdx = i;
+    } else {
+      break;
+    }
+  }
+  if (activeIdx >= 0 && activeIdx < headings.value.length) {
+    activeHeadingIndex.value = activeIdx;
+  }
 }
 
 // 打字机模式：滚动到光标位置，保持光标行在屏幕垂直居中
@@ -2597,6 +2773,11 @@ onMounted(async () => {
         if (e.key === "b") { e.preventDefault(); toggleSidebar(); }
         if (e.key === "f") { e.preventDefault(); openSearch(); }
       }
+      // F7 切换滚动同步
+      if (e.key === "F7") {
+        e.preventDefault();
+        toggleScrollSync();
+      }
       // F8 切换专注模式
       if (e.key === "F8") {
         e.preventDefault();
@@ -2632,6 +2813,26 @@ onMounted(async () => {
         scrollToCursor();
       }
     });
+
+    // 滚动同步：监听编辑器和预览区的滚动事件
+    let editorScrollTimer: number | null = null;
+    let previewScrollTimer: number | null = null;
+    document.addEventListener("scroll", (e) => {
+      const target = e.target as HTMLElement;
+      if (target.classList?.contains("editor-input")) {
+        if (editorScrollTimer) cancelAnimationFrame(editorScrollTimer);
+        editorScrollTimer = requestAnimationFrame(() => {
+          syncPreviewFromEditor();
+        });
+      } else if (target.classList?.contains("preview-area") || target.closest?.(".preview-area")) {
+        const preview = target.closest?.(".preview-area") as HTMLElement || target;
+        if (!preview.classList?.contains("preview-area")) return;
+        if (previewScrollTimer) cancelAnimationFrame(previewScrollTimer);
+        previewScrollTimer = requestAnimationFrame(() => {
+          syncEditorFromPreview();
+        });
+      }
+    }, true);
   } catch {}
 });
 
@@ -3033,11 +3234,16 @@ onUnmounted(() => {
               v-for="(heading, idx) in headings"
               :key="idx"
               @click="jumpToHeading(heading.line)"
-              class="outline-item cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 rounded px-2 py-1 text-sm"
+              class="outline-item cursor-pointer rounded px-2 py-1 text-sm transition-colors"
+              :class="[
+                activeHeadingIndex === idx
+                  ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-medium border-l-2 border-blue-500 pl-1.5'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
+              ]"
               :style="{ paddingLeft: ((heading.level - 1) * 12 + 8) + 'px' }"
             >
-              <span class="text-gray-600 dark:text-gray-400 mr-1">#</span>
-              <span class="text-gray-700 dark:text-gray-300">{{ heading.text }}</span>
+              <span class="text-gray-500 dark:text-gray-400 mr-1">#</span>
+              <span>{{ heading.text }}</span>
             </div>
           </div>
           <!-- 最近文件视图 -->
@@ -3187,6 +3393,12 @@ onUnmounted(() => {
       <span>{{ charCount }} 字符</span>
       <span>{{ wordCount }} 词</span>
       <span v-if="selectedCount > 0" class="text-blue-500">选中 {{ selectedCount }} 字</span>
+      <span
+        v-if="showSplit"
+        @click="toggleScrollSync"
+        :class="scrollSync ? 'text-blue-500 cursor-pointer hover:text-blue-600' : 'text-gray-400 dark:text-gray-500 cursor-pointer hover:text-gray-500 dark:hover:text-gray-400'"
+        :title="scrollSync ? '滚动同步已开启 (F7)' : '滚动同步已暂停 (F7)'"
+      >🔗 {{ scrollSync ? '同步' : '已暂停' }}</span>
       <span v-if="typewriterMode" class="text-blue-500" title="打字机模式 (F9)">⌨️ 打字机</span>
       <span v-if="focusMode" class="text-purple-500" title="专注模式 (F8)">🎯 专注</span>
       <span class="ml-auto text-gray-400 dark:text-gray-500">自动保存: 30s</span>
