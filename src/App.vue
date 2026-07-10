@@ -2365,16 +2365,124 @@ ${mermaidJs}
 }
 
 const showPrintHint = ref(localStorage.getItem("pdfHintShown") === "true");
+
+/**
+ * 组装打印用独立 HTML 文档(空 title 避免页眉显示应用名)。
+ */
+function buildPrintHtml(bodyHtml: string, theme: ReturnType<typeof captureCurrentTheme>): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN" data-theme="${theme.dataTheme}"${theme.isDark ? ' class="dark"' : ""}>
+<head>
+<meta charset="UTF-8">
+<title></title>
+<style>
+:root {
+  --ink-font: ${theme.fontFamily};
+  --ink-bg: ${theme.isDark ? theme.bodyBg : '#ffffff'};
+  --ink-fg: ${theme.isDark ? theme.bodyColor : '#000000'};
+}
+${EXPORT_BASE_CSS}
+${theme.highlightCss}
+${katexCss}
+${PRINT_CSS}
+</style>
+</head>
+<body>
+<div class="markdown-body">${bodyHtml}</div>
+<script>
+${mermaidJs}
+(function() {
+  if (typeof mermaid === 'undefined') return;
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: ${theme.isDark ? "'dark'" : "'default'"},
+      securityLevel: 'loose',
+      fontFamily: 'inherit'
+    });
+    var diagrams = document.querySelectorAll('.mermaid-diagram[data-code]');
+    var pending = diagrams.length;
+    if (pending === 0) { window.dispatchEvent(new Event('mermaid-ready')); return; }
+    diagrams.forEach(function(el, i) {
+      var code = decodeURIComponent(el.getAttribute('data-code') || '');
+      if (!code) { if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready')); return; }
+      var id = 'm-' + Date.now() + '-' + i;
+      mermaid.render(id, code).then(function(r) {
+        el.innerHTML = r.svg;
+        if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready'));
+      }).catch(function(e) {
+        el.innerHTML = '<pre class="mermaid-error">Mermaid 渲染失败: ' + (e.message || e) + '</pre>';
+        if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready'));
+      });
+    });
+  } catch (e) {
+    console.error('Mermaid init failed:', e);
+    window.dispatchEvent(new Event('mermaid-ready'));
+  }
+})();
+</` + `script>
+</body>
+</html>`;
+}
+
+/**
+ * 等待 iframe 内图片、字体加载完成。
+ */
+function waitForImagesAndFonts(win: Window): Promise<void> {
+  const imgPromises = Array.from(win.document.images).map((img) =>
+    img.complete
+      ? Promise.resolve()
+      : new Promise<void>((res) => {
+          img.onload = () => res();
+          img.onerror = () => res();
+        }),
+  );
+  const fontPromise = (win as any).fonts?.ready ?? Promise.resolve();
+  const mermaidPromise = new Promise<void>((res) => {
+    win.addEventListener('mermaid-ready', () => res(), { once: true });
+    setTimeout(() => res(), 5000);
+  });
+  return Promise.all([...imgPromises, fontPromise, mermaidPromise]).then(() => undefined);
+}
+
+/**
+ * 构建隐藏 iframe 并打印纯文档内容(不含应用 chrome)。
+ */
+async function printDocument(): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab) return;
+
+  const withImages = await inlineImagesInMarkdown(tab.content, tab.path);
+  const withToc = preprocessToc(withImages, headings.value);
+  const bodyHtml = renderHTMLForExport(withToc);
+  const theme = captureCurrentTheme();
+  const docHtml = buildPrintHtml(bodyHtml, theme);
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;border:0;';
+  document.body.appendChild(iframe);
+
+  try {
+    const doc = iframe.contentWindow!.document;
+    doc.open();
+    doc.write(docHtml);
+    doc.close();
+
+    await waitForImagesAndFonts(iframe.contentWindow!);
+
+    iframe.contentWindow!.focus();
+    iframe.contentWindow!.print();
+  } finally {
+    setTimeout(() => iframe.remove(), 2000);
+  }
+}
+
 async function exportPDF() {
   if (!activeTab.value) return;
   showPrintHint.value = false;
   localStorage.setItem("pdfHintShown", "true");
-  // 切到预览模式,等一帧让 mermaid/KaTeX 渲染好,再触发系统打印
-  setViewMode('preview');
-  await nextTick();
-  await new Promise((r) => setTimeout(r, 150));
   try {
-    window.print();
+    await printDocument();
   } catch (e) {
     console.error("打印失败:", e);
   }
@@ -3084,7 +3192,7 @@ onUnmounted(() => {
       <Printer :size="18" class="print-hint-icon" />
       <div class="print-hint-body flex-1">
         <strong>PDF 导出说明</strong>
-        系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>(Win10/11 自带)即可另存为 PDF。文字可选可搜索,样式与预览完全一致。
+        系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>(Win10/11 自带)即可另存为 PDF。文字可选可搜索,样式与预览完全一致。建议在「更多设置」中关闭<strong>页眉和页脚</strong>,以获得不含日期和标题的纯净 PDF。
       </div>
       <button @click="dismissPrintHint" class="print-hint-close" title="知道了">
         <X :size="14" />
@@ -3691,51 +3799,6 @@ onUnmounted(() => {
 }
 .dark .overflow-menu-item:hover {
   background: rgba(255, 255, 255, 0.06);
-}
-
-/* 打印:隐藏工具栏/Tab/侧边栏/状态栏,只打印预览内容 */
-@media print {
-  body { background: white !important; color: black !important; }
-  .toolbar,
-  .tab-bar,
-  .sidebar,
-  .search-panel,
-  .empty-state,
-  .toolbar-tabs,
-  .tab-icon-btn,
-  .tab-item,
-  .overflow-menu,
-  .print-hint {
-    display: none !important;
-  }
-  .preview-area,
-  .editor-area {
-    border: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    max-width: 100% !important;
-  }
-  .markdown-body { max-width: 100% !important; }
-  .ink-image-toolbar,
-  .ink-codeblock-toolbar,
-  .ink-table-toolbar {
-    display: none !important;
-  }
-  * {
-    -webkit-print-color-adjust: exact !important;
-    print-color-adjust: exact !important;
-  }
-  h1, h2, h3, h4, h5, h6 {
-    page-break-after: avoid;
-    break-after: avoid;
-  }
-  pre, blockquote, table, img, figure {
-    page-break-inside: avoid;
-    break-inside: avoid;
-  }
-  p, li { orphans: 3; widows: 3; }
-  a { color: inherit !important; text-decoration: none !important; }
-  a[href]::after { content: "" !important; }
 }
 
 /* 打印提示横幅 */
