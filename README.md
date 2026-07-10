@@ -32,8 +32,6 @@
   - ✏️ 重命名 / 📁 移动 / 🗜️ 一键压缩(jpeg / png)
   - 📋 复制绝对路径 / 🔗 复制 Markdown 引用
   - ✕ 移除文档中的引用
-- **专注模式** `F8`:隐藏工具栏与侧边栏,只留正文
-- **打字机模式** `F9`:光标始终在屏幕中央
 - **最近文件**:自动记录最近打开的 10 个文件
 
 ### 文件与协作
@@ -63,11 +61,10 @@
 | `Ctrl+Shift+S` | 另存为 |
 | `Ctrl+B` | 切换侧边栏 |
 | `Ctrl+F` | 搜索替换 |
-| `Ctrl+滚轮` / 工具栏 | 切换分栏 / 纯编辑 / 纯预览 |
+| `Ctrl+\` | 循环切换 编辑 / 分栏 / 预览 视图 |
+| `F1` | 快捷键说明 |
 | `F7` | 切换滚动同步 |
-| `F8` | 专注模式 |
-| `F9` | 打字机模式 |
-| `Esc` | 关闭搜索面板 |
+| `Esc` | 关闭搜索面板 / 对话框 |
 
 ## 安装
 
@@ -93,7 +90,7 @@ npm run tauri build        # 打包出 NSIS 安装包(.exe)
 `npm run tauri build` 完成后,安装包位于:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.2.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
 ```
 
 双击安装即可,Windows 会自动注册 `.md` / `.markdown` / `.txt` 文件关联。
@@ -197,6 +194,22 @@ inkstone-md/
 
 ## 版本记录
 
+### [1.3.0] - 功能补全与体验修复
+
+聚焦用户反馈的三个问题:补齐纯编辑模式、原生菜单栏增加快捷键与关于。详见 [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)。
+
+#### ✨ 新增
+- **纯编辑模式**:工具栏(铅笔图标)、原生菜单"视图 → 编辑模式"、`Ctrl+\` 循环切换 编辑 / 分栏 / 预览 三种视图;视图模式持久化,重启恢复
+- **原生菜单"帮助"子菜单**:`快捷键(F1)` 弹出分组快捷键对话框,`关于 InkStone MD` 弹出版本 / 技术栈 / 许可证信息
+- `F1` 快捷键直接打开快捷键对话框;关于对话框版本号经 Vite `define` 从 `package.json` 注入,避免多处手改
+- 快捷键清单抽为 `SHORTCUTS` 单一数据源常量
+
+#### 🔧 改进
+- 视图模式由双布尔 ref 重构为单一 `viewMode` 枚举(edit/split/preview),`showSplit`/`showPreview` 改为 `computed` 派生,根除非法组合态
+- 三处 version 同步到 `1.3.0`
+- 打印样式隐藏 modal 遮罩,避免打印时对话框干扰
+- 移除体验不佳的专注模式 (F8) 与打字机模式 (F9)
+
 ### [1.2.0] - 体验优化版
 
 专注于渲染观感与阅读体验的优化版本,详见 [ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)。
@@ -291,11 +304,11 @@ inkstone-md/
 
 ### [0.1.2] - 早期开发版
 
-历史版本。实现了多标签页、文件树、搜索替换、KaTeX、Mermaid、自动保存、最近文件、专注 / 打字机模式、HTML / PDF 导出等基础能力,但图片显示与 Win 10 文件关联存在已知 BUG。
+历史版本。实现了多标签页、文件树、搜索替换、KaTeX、Mermaid、自动保存、最近文件、HTML / PDF 导出等基础能力,但图片显示与 Win 10 文件关联存在已知 BUG。
 
 ## 路线图
 
-V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md) 与 [ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)(本期优化的详细记录与剩余工作项)。
+V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)、[ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md) 与 [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)(各期优化的详细记录与剩余工作项)。
 
 ## 贡献
 

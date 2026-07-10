@@ -22,7 +22,7 @@ import {
   List, ListOrdered, SquareCheck, Quote,
   Image, Link, Sigma, Code2, Table, ListTree,
   FileCode, Printer,
-  Columns2, Eye, PanelLeft, Plus, X,
+  Columns2, Eye, Pencil, PanelLeft, Plus, X,
   Sun, Moon, MoreHorizontal, Feather,
 } from "@lucide/vue";
 
@@ -152,9 +152,17 @@ function setTheme(name: ThemeName) {
     nextTick(() => renderMermaidDiagrams());
   }
 }
-const showPreview = ref(false);
-const showSplit = ref(true);
-const typewriterMode = ref(localStorage.getItem('typewriterMode') === 'true');
+type ViewMode = 'edit' | 'split' | 'preview';
+const viewMode = ref<ViewMode>((localStorage.getItem('viewMode') as ViewMode) || 'split');
+// 由 viewMode 派生的布尔值,保持模板/下游读取不变(只读,不可直接赋值)
+const showSplit = computed(() => viewMode.value === 'split');
+const showPreview = computed(() => viewMode.value === 'preview');
+function setViewMode(mode: ViewMode) {
+  viewMode.value = mode;
+  localStorage.setItem('viewMode', mode);
+  // 切到分栏时对齐预览位置
+  if (mode === 'split') nextTick(() => syncPreviewFromEditor());
+}
 const scrollSync = ref(localStorage.getItem('scrollSync') !== 'false');
 let syncingFrom: 'editor' | 'preview' | null = null;
 const activeHeadingIndex = ref(-1);
@@ -505,9 +513,25 @@ function getFileName(path: string): string {
 const isDragging = ref(false);
 const dragCounter = ref(0);
 
-// 专注模式状态
-const focusMode = ref(false);
-const currentLine = ref(1);
+// 快捷键 / 关于对话框
+const showShortcutsModal = ref(false);
+const showAboutModal = ref(false);
+const appVersion = __APP_VERSION__;
+
+// 快捷键清单(单一数据源,对话框与 README 共同参考)
+const SHORTCUTS: { group: string; key: string; desc: string }[] = [
+  { group: '文件', key: 'Ctrl+N', desc: '新建文件' },
+  { group: '文件', key: 'Ctrl+O', desc: '打开文件' },
+  { group: '文件', key: 'Ctrl+S', desc: '保存文件' },
+  { group: '文件', key: 'Ctrl+Shift+S', desc: '另存为' },
+  { group: '编辑', key: 'Ctrl+F', desc: '搜索替换' },
+  { group: '编辑', key: 'Ctrl+Z / Ctrl+Y', desc: '撤销 / 重做' },
+  { group: '视图', key: 'Ctrl+B', desc: '切换侧边栏' },
+  { group: '视图', key: 'Ctrl+\\', desc: '循环切换 编辑/分栏/预览' },
+  { group: '视图', key: 'F7', desc: '切换滚动同步' },
+  { group: '帮助', key: 'F1', desc: '快捷键说明' },
+  { group: '其他', key: 'Esc', desc: '关闭搜索/对话框' },
+];
 
 // 搜索功能状态
 const showSearch = ref(false);
@@ -1244,6 +1268,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(start - 1, start - 1);
+
         });
         return;
       }
@@ -1279,6 +1304,7 @@ function handleKeydown(e: KeyboardEvent) {
       nextTick(() => {
         textarea.focus();
         textarea.setSelectionRange(newCursorPos, newCursorPos);
+
       });
       return;
     }
@@ -1300,6 +1326,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(start + 1, start + 1);
+
         });
         return;
       }
@@ -1336,6 +1363,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(newCursorPos, newCursorPos);
+
         });
         return;
       }
@@ -1364,6 +1392,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(newCursorPos, newCursorPos);
+
         });
         return;
       }
@@ -1384,6 +1413,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(pipePos + 1, pipePos + 1);
+
         });
       }
       return;
@@ -1403,6 +1433,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(start + prefix.length - match[0].length + 1, start + prefix.length - match[0].length + 1);
+
         });
       }
       return;
@@ -1773,6 +1804,7 @@ function insertText(text: string) {
   nextTick(() => {
     textarea.focus();
     textarea.setSelectionRange(start + text.length, start + text.length);
+
   });
 }
 
@@ -2246,7 +2278,7 @@ const PRINT_CSS = `
 @page { size: A4; margin: 15mm; }
 @media print {
   body { background: white !important; color: black !important; padding: 0 !important; }
-  .toolbar, .tab-bar, .sidebar, .search-panel, .empty-state, .status-bar, .toolbar-tabs, .tab-icon-btn, .tab-item { display: none !important; }
+  .toolbar, .tab-bar, .sidebar, .search-panel, .empty-state, .status-bar, .toolbar-tabs, .tab-icon-btn, .tab-item, .modal-overlay { display: none !important; }
   .preview-area, .editor-area { border: none !important; padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
   .markdown-body { max-width: 100% !important; }
   .ink-image-toolbar, .ink-codeblock-toolbar, .ink-table-toolbar, .mermaid-diagram[data-code] { display: none !important; }
@@ -2338,8 +2370,7 @@ async function exportPDF() {
   showPrintHint.value = false;
   localStorage.setItem("pdfHintShown", "true");
   // 切到预览模式,等一帧让 mermaid/KaTeX 渲染好,再触发系统打印
-  showSplit.value = false;
-  showPreview.value = true;
+  setViewMode('preview');
   await nextTick();
   await new Promise((r) => setTimeout(r, 150));
   try {
@@ -2370,24 +2401,6 @@ function toggleDark() {
     fontFamily: 'ui-sans-serif, system-ui, sans-serif',
   });
   nextTick(() => renderMermaidDiagrams());
-}
-
-// 专注模式切换
-function toggleFocusMode() {
-  focusMode.value = !focusMode.value;
-  // 关闭专注模式时清除背景样式
-  if (!focusMode.value) {
-    const textareas = document.querySelectorAll('.editor-input');
-    textareas.forEach((ta) => {
-      (ta as HTMLTextAreaElement).style.background = '';
-    });
-  }
-}
-
-// 打字机模式切换
-function toggleTypewriterMode() {
-  typewriterMode.value = !typewriterMode.value;
-  localStorage.setItem('typewriterMode', String(typewriterMode.value));
 }
 
 // 滚动同步切换
@@ -2482,43 +2495,6 @@ function updateActiveHeadingFromScroll() {
   if (activeIdx >= 0 && activeIdx < headings.value.length) {
     activeHeadingIndex.value = activeIdx;
   }
-}
-
-// 打字机模式：滚动到光标位置，保持光标行在屏幕垂直居中
-function scrollToCursor() {
-  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
-  if (!textarea) return;
-
-  // 获取光标所在的行号
-  const pos = textarea.selectionStart;
-  const content = textarea.value.substring(0, pos);
-  const lineNumber = content.split('\n').length;
-
-  // 计算光标在textarea中的垂直位置（近似值：行号 * 行高）
-  const lineHeight = 20; // 假设行高为 20px
-  const cursorTop = (lineNumber - 1) * lineHeight;
-
-  // 获取 textarea 的可见区域高度
-  const textareaHeight = textarea.clientHeight;
-
-  // 计算滚动位置，使光标行居中
-  const scrollTo = cursorTop - (textareaHeight / 2) + (lineHeight / 2);
-
-  textarea.scrollTop = Math.max(0, scrollTo);
-}
-
-// 更新当前行号并应用高亮
-function updateCurrentLine() {
-  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
-  if (!textarea || !activeTab.value) return;
-  const pos = textarea.selectionStart;
-  const content = activeTab.value.content.substring(0, pos);
-  currentLine.value = content.split('\n').length;
-
-  // 使用背景渐变高亮当前行
-  const lineHeight = 28; // 约等于 line-height: 1.8 * 16px
-  const highlightPos = (currentLine.value - 1) * lineHeight;
-  textarea.style.background = `linear-gradient(transparent ${highlightPos}px, rgba(59, 130, 246, 0.1) ${highlightPos}px, rgba(59, 130, 246, 0.1) ${highlightPos + lineHeight}px, transparent ${highlightPos + lineHeight}px)`;
 }
 
 function startResize() {
@@ -2765,16 +2741,23 @@ onMounted(async () => {
         case "sidebar":
           toggleSidebar();
           break;
+        case "edit":
+          setViewMode('edit');
+          break;
         case "split":
-          showSplit.value = true;
-          showPreview.value = false;
+          setViewMode('split');
           break;
         case "preview":
-          showPreview.value = true;
-          showSplit.value = false;
+          setViewMode('preview');
           break;
         case "dark":
           toggleDark();
+          break;
+        case "shortcuts":
+          showShortcutsModal.value = true;
+          break;
+        case "about":
+          showAboutModal.value = true;
           break;
       }
     });
@@ -2802,25 +2785,36 @@ onMounted(async () => {
         if (e.key === "s" && e.shiftKey) { e.preventDefault(); saveFileAs(); }
         if (e.key === "b") { e.preventDefault(); toggleSidebar(); }
         if (e.key === "f") { e.preventDefault(); openSearch(); }
+        // Ctrl+\ 循环切换 编辑/分栏/预览
+        if (e.key === "\\") {
+          e.preventDefault();
+          const order: ViewMode[] = ['edit', 'split', 'preview'];
+          const idx = order.indexOf(viewMode.value);
+          setViewMode(order[(idx + 1) % order.length]);
+        }
       }
       // F7 切换滚动同步
       if (e.key === "F7") {
         e.preventDefault();
         toggleScrollSync();
       }
-      // F8 切换专注模式
-      if (e.key === "F8") {
+      // F1 快捷键说明
+      if (e.key === "F1") {
         e.preventDefault();
-        toggleFocusMode();
+        showShortcutsModal.value = true;
       }
-      // F9 切换打字机模式
-      if (e.key === "F9") {
-        e.preventDefault();
-        toggleTypewriterMode();
-      }
-      if (e.key === "Escape" && showSearch.value) {
-        e.preventDefault();
-        closeSearch();
+      // Esc 优先关闭对话框,其次关搜索面板
+      if (e.key === "Escape") {
+        if (showShortcutsModal.value) {
+          e.preventDefault();
+          showShortcutsModal.value = false;
+        } else if (showAboutModal.value) {
+          e.preventDefault();
+          showAboutModal.value = false;
+        } else if (showSearch.value) {
+          e.preventDefault();
+          closeSearch();
+        }
       }
     });
 
@@ -2833,14 +2827,6 @@ onMounted(async () => {
         selectedCount.value = selectedText.length;
       } else {
         selectedCount.value = 0;
-      }
-
-      if (focusMode.value) {
-        updateCurrentLine();
-      }
-      // 打字机模式：光标位置变化时自动滚动
-      if (typewriterMode.value) {
-        scrollToCursor();
       }
     });
 
@@ -3046,7 +3032,15 @@ onUnmounted(() => {
 
       <div class="toolbar-group">
         <button
-          @click="showSplit = true; showPreview = false"
+          @click="setViewMode('edit')"
+          class="toolbar-btn"
+          :class="{ active: viewMode === 'edit' }"
+          title="编辑视图 (Ctrl+\)"
+        >
+          <Pencil :size="16" />
+        </button>
+        <button
+          @click="setViewMode('split')"
           class="toolbar-btn"
           :class="{ active: showSplit }"
           title="分栏视图"
@@ -3054,7 +3048,7 @@ onUnmounted(() => {
           <Columns2 :size="16" />
         </button>
         <button
-          @click="showPreview = true; showSplit = false"
+          @click="setViewMode('preview')"
           class="toolbar-btn"
           :class="{ active: showPreview }"
           title="预览视图"
@@ -3378,7 +3372,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Editor -->
-      <div class="flex-1 overflow-hidden editor-area" :class="{ 'focus-mode': focusMode }">
+      <div class="flex-1 overflow-hidden editor-area">
         <div v-show="!showPreview && !showSplit" class="w-full h-full">
           <textarea
             :value="activeTab?.content"
@@ -3429,9 +3423,61 @@ onUnmounted(() => {
         :class="scrollSync ? 'text-blue-500 cursor-pointer hover:text-blue-600' : 'text-gray-400 dark:text-gray-500 cursor-pointer hover:text-gray-500 dark:hover:text-gray-400'"
         :title="scrollSync ? '滚动同步已开启 (F7)' : '滚动同步已暂停 (F7)'"
       >🔗 {{ scrollSync ? '同步' : '已暂停' }}</span>
-      <span v-if="typewriterMode" class="text-blue-500" title="打字机模式 (F9)">⌨️ 打字机</span>
-      <span v-if="focusMode" class="text-purple-500" title="专注模式 (F8)">🎯 专注</span>
       <span class="ml-auto text-gray-400 dark:text-gray-500">自动保存: 30s</span>
+    </div>
+
+    <!-- 快捷键对话框 -->
+    <div
+      v-if="showShortcutsModal"
+      class="modal-overlay"
+      @click.self="showShortcutsModal = false"
+    >
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>快捷键</h3>
+          <button class="modal-close" title="关闭 (Esc)" @click="showShortcutsModal = false">
+            <X :size="16" />
+          </button>
+        </div>
+        <div class="modal-body">
+          <table class="shortcuts-table">
+            <thead>
+              <tr><th>分组</th><th>快捷键</th><th>功能</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(s, i) in SHORTCUTS" :key="i">
+                <td class="text-gray-500 dark:text-gray-400">{{ s.group }}</td>
+                <td><code>{{ s.key }}</code></td>
+                <td>{{ s.desc }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 关于对话框 -->
+    <div
+      v-if="showAboutModal"
+      class="modal-overlay"
+      @click.self="showAboutModal = false"
+    >
+      <div class="modal-card about-card">
+        <div class="modal-header">
+          <h3>关于 InkStone MD</h3>
+          <button class="modal-close" title="关闭 (Esc)" @click="showAboutModal = false">
+            <X :size="16" />
+          </button>
+        </div>
+        <div class="modal-body about-body">
+          <div class="about-logo"><Feather :size="40" /></div>
+          <div class="about-name">InkStone MD</div>
+          <div class="about-version">版本 {{ appVersion }}</div>
+          <p class="about-desc">轻量、优雅的桌面 Markdown 编辑器</p>
+          <p class="about-meta">技术栈: Tauri 2 + Vue 3</p>
+          <p class="about-meta">许可证: GPL-3.0</p>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -3897,15 +3943,6 @@ onUnmounted(() => {
   background: transparent;
 }
 
-/* 专注模式样式 */
-.focus-mode .editor-input {
-  line-height: 1.8;
-}
-
-.focus-mode .editor-input::placeholder {
-  color: transparent;
-}
-
 /* Mermaid diagram styles */
 .mermaid-diagram {
   margin: 1rem 0;
@@ -4267,5 +4304,137 @@ onUnmounted(() => {
 :deep(.ink-table[data-edit="true"]) :deep(td:focus) {
   outline: 2px solid #3b82f6;
   background: rgba(59, 130, 246, 0.08);
+}
+
+/* 通用对话框样式 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.modal-card {
+  background: #fff;
+  color: #1f2937;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.dark .modal-card {
+  background: #1f2937;
+  color: #e5e7eb;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.dark .modal-header {
+  border-color: #374151;
+}
+.modal-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.modal-close:hover {
+  background: rgba(127, 127, 127, 0.15);
+}
+.modal-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+/* 快捷键表格 */
+.shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.shortcuts-table th,
+.shortcuts-table td {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.dark .shortcuts-table th,
+.dark .shortcuts-table td {
+  border-color: #374151;
+}
+.shortcuts-table th {
+  font-weight: 600;
+  color: #6b7280;
+}
+.dark .shortcuts-table th {
+  color: #9ca3af;
+}
+.shortcuts-table code {
+  background: rgba(127, 127, 127, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* 关于对话框 */
+.about-card {
+  width: 380px;
+}
+.about-body {
+  text-align: center;
+  padding: 28px 20px;
+}
+.about-logo {
+  color: #3b82f6;
+  margin-bottom: 10px;
+}
+.dark .about-logo {
+  color: #60a5fa;
+}
+.about-name {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.about-version {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 14px;
+}
+.dark .about-version {
+  color: #9ca3af;
+}
+.about-desc {
+  font-size: 13px;
+  margin: 6px 0;
+}
+.about-meta {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 4px 0;
+}
+.dark .about-meta {
+  color: #9ca3af;
 }
 </style>

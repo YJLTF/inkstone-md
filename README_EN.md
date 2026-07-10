@@ -62,10 +62,12 @@ A lightweight and elegant desktop Markdown editor built with Tauri 2 + Vue 3. Ou
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+F` | Search & Replace |
-| Toolbar buttons | Switch split / edit-only / preview-only |
+| `Ctrl+\` | Cycle edit / split / preview view |
+| `F1` | Keyboard shortcuts |
+| `F7` | Toggle scroll sync |
 | `F8` | Focus mode |
 | `F9` | Typewriter mode |
-| `Esc` | Close the search panel |
+| `Esc` | Close search panel / dialogs |
 
 ## Installation
 
@@ -91,7 +93,7 @@ npm run tauri build        # produce the NSIS installer (.exe)
 After `npm run tauri build` finishes, the installer is at:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.1.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
 ```
 
 Double-click to install. Windows will register `.md` / `.markdown` / `.txt` associations automatically.
@@ -194,6 +196,25 @@ inkstone-md/
 | `frontend_ready` | Frontend handshake, dispatches the startup pending file |
 
 ## Changelog
+
+### [1.3.0] — feature completion & experience fixes
+
+Focused on four reported issues: adding a true edit-only view, fixing the typewriter / focus modes that had no visible effect, and adding Shortcuts & About entries to the native menu bar. See [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md).
+
+#### ✨ Added
+- **Edit-only view**: toolbar (pencil icon), native menu "View → Edit Mode", and `Ctrl+\` to cycle edit / split / preview; the view mode is persisted across restarts
+- **Native "Help" menu**: "Shortcuts (F1)" opens a grouped shortcuts dialog, "About InkStone MD" shows version / stack / license
+- `F1` opens the shortcuts dialog directly; the About version is injected from `package.json` via Vite `define`
+- Shortcuts list centralized in a single `SHORTCUTS` constant
+
+#### 🐛 Fixed
+- **Typewriter mode had no effect**: `scrollToCursor` hardcoded line height 20px (actual ~28.8px) so the cursor never centered; now uses real `getComputedStyle` line height + character-ratio pixel estimation, and centers immediately on toggle / view switch
+- **Focus mode had no effect**: `toggleFocusMode` had no side-effect on enable and the current-line highlight was too faint and hidden under the dark background; now highlights the current line on enable, with stronger theme-aware contrast (light 0.18 / dark 0.22) and `scrollTop` correction so the highlight follows the line while scrolling
+
+#### 🔧 Changed
+- View mode refactored from two booleans to a single `viewMode` enum (edit/split/preview); `showSplit`/`showPreview` are now `computed` derivations, eliminating invalid combined states
+- Versions synced to `1.3.0` across `package.json` / `Cargo.toml` / `tauri.conf.json`
+- Print styles hide the modal overlay
 
 ### [1.1.0] — optimization pass
 
