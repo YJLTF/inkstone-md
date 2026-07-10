@@ -63,11 +63,12 @@
 | `Ctrl+Shift+S` | 另存为 |
 | `Ctrl+B` | 切换侧边栏 |
 | `Ctrl+F` | 搜索替换 |
-| `Ctrl+滚轮` / 工具栏 | 切换分栏 / 纯编辑 / 纯预览 |
+| `Ctrl+\` | 循环切换 编辑 / 分栏 / 预览 视图 |
+| `F1` | 快捷键说明 |
 | `F7` | 切换滚动同步 |
 | `F8` | 专注模式 |
 | `F9` | 打字机模式 |
-| `Esc` | 关闭搜索面板 |
+| `Esc` | 关闭搜索面板 / 对话框 |
 
 ## 安装
 
@@ -93,7 +94,7 @@ npm run tauri build        # 打包出 NSIS 安装包(.exe)
 `npm run tauri build` 完成后,安装包位于:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.2.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
 ```
 
 双击安装即可,Windows 会自动注册 `.md` / `.markdown` / `.txt` 文件关联。
@@ -197,6 +198,25 @@ inkstone-md/
 
 ## 版本记录
 
+### [1.3.0] - 功能补全与体验修复
+
+聚焦用户反馈的四个问题:补齐纯编辑模式、修复打字机 / 专注模式失效、原生菜单栏增加快捷键与关于。详见 [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)。
+
+#### ✨ 新增
+- **纯编辑模式**:工具栏(铅笔图标)、原生菜单"视图 → 编辑模式"、`Ctrl+\` 循环切换 编辑 / 分栏 / 预览 三种视图;视图模式持久化,重启恢复
+- **原生菜单"帮助"子菜单**:`快捷键(F1)` 弹出分组快捷键对话框,`关于 InkStone MD` 弹出版本 / 技术栈 / 许可证信息
+- `F1` 快捷键直接打开快捷键对话框;关于对话框版本号经 Vite `define` 从 `package.json` 注入,避免多处手改
+- 快捷键清单抽为 `SHORTCUTS` 单一数据源常量
+
+#### 🐛 修复
+- **打字机模式无效果**:`scrollToCursor` 行高原硬编码 20px(实际约 28.8px)导致光标未居中;改用 `getComputedStyle` 真实行高 + 字符比例估算光标像素位置;开启瞬间、切视图后立即居中
+- **专注模式无效果**:`toggleFocusMode` 开启时无副作用,当前行高亮太淡且被暗色背景盖住;现开启即高亮当前行,高亮色按深浅主题提升对比(浅色 0.18 / 深色 0.22),并用 `scrollTop` 修正使滚动时高亮条跟随当前行
+
+#### 🔧 改进
+- 视图模式由双布尔 ref 重构为单一 `viewMode` 枚举(edit/split/preview),`showSplit`/`showPreview` 改为 `computed` 派生,根除非法组合态
+- 三处 version 同步到 `1.3.0`
+- 打印样式隐藏 modal 遮罩,避免打印时对话框干扰
+
 ### [1.2.0] - 体验优化版
 
 专注于渲染观感与阅读体验的优化版本,详见 [ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)。
@@ -295,7 +315,7 @@ inkstone-md/
 
 ## 路线图
 
-V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md) 与 [ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)(本期优化的详细记录与剩余工作项)。
+V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)、[ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md) 与 [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)(各期优化的详细记录与剩余工作项)。
 
 ## 贡献
 

@@ -373,13 +373,24 @@ pub fn run() {
                 true,
                 &[
                     &MenuItem::with_id(app, "sidebar", "文件树\tCtrl+B", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "edit", "编辑模式\tCtrl+\\", true, None::<&str>)?,
                     &MenuItem::with_id(app, "split", "分栏视图", true, None::<&str>)?,
                     &MenuItem::with_id(app, "preview", "预览模式", true, None::<&str>)?,
                     &MenuItem::with_id(app, "dark", "深色主题", true, None::<&str>)?,
                 ],
             )?;
 
-            let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu])?;
+            let help_menu = Submenu::with_items(
+                app,
+                "帮助",
+                true,
+                &[
+                    &MenuItem::with_id(app, "shortcuts", "快捷键\tF1", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "about", "关于 InkStone MD", true, None::<&str>)?,
+                ],
+            )?;
+
+            let menu = Menu::with_items(app, &[&file_menu, &edit_menu, &view_menu, &help_menu])?;
 
             window.set_menu(menu)?;
 
