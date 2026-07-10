@@ -162,11 +162,7 @@ function setViewMode(mode: ViewMode) {
   localStorage.setItem('viewMode', mode);
   // 切到分栏时对齐预览位置
   if (mode === 'split') nextTick(() => syncPreviewFromEditor());
-  // 切视图后若打字机/专注开启,重新应用到新可见的编辑器
-  if (typewriterMode.value) nextTick(scrollToCursor);
-  if (focusMode.value) nextTick(updateCurrentLine);
 }
-const typewriterMode = ref(localStorage.getItem('typewriterMode') === 'true');
 const scrollSync = ref(localStorage.getItem('scrollSync') !== 'false');
 let syncingFrom: 'editor' | 'preview' | null = null;
 const activeHeadingIndex = ref(-1);
@@ -517,10 +513,6 @@ function getFileName(path: string): string {
 const isDragging = ref(false);
 const dragCounter = ref(0);
 
-// 专注模式状态
-const focusMode = ref(false);
-const currentLine = ref(1);
-
 // 快捷键 / 关于对话框
 const showShortcutsModal = ref(false);
 const showAboutModal = ref(false);
@@ -537,8 +529,6 @@ const SHORTCUTS: { group: string; key: string; desc: string }[] = [
   { group: '视图', key: 'Ctrl+B', desc: '切换侧边栏' },
   { group: '视图', key: 'Ctrl+\\', desc: '循环切换 编辑/分栏/预览' },
   { group: '视图', key: 'F7', desc: '切换滚动同步' },
-  { group: '视图', key: 'F8', desc: '专注模式' },
-  { group: '视图', key: 'F9', desc: '打字机模式' },
   { group: '帮助', key: 'F1', desc: '快捷键说明' },
   { group: '其他', key: 'Esc', desc: '关闭搜索/对话框' },
 ];
@@ -1278,6 +1268,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(start - 1, start - 1);
+
         });
         return;
       }
@@ -1313,6 +1304,7 @@ function handleKeydown(e: KeyboardEvent) {
       nextTick(() => {
         textarea.focus();
         textarea.setSelectionRange(newCursorPos, newCursorPos);
+
       });
       return;
     }
@@ -1334,6 +1326,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(start + 1, start + 1);
+
         });
         return;
       }
@@ -1370,6 +1363,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(newCursorPos, newCursorPos);
+
         });
         return;
       }
@@ -1398,6 +1392,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(newCursorPos, newCursorPos);
+
         });
         return;
       }
@@ -1418,6 +1413,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(pipePos + 1, pipePos + 1);
+
         });
       }
       return;
@@ -1437,6 +1433,7 @@ function handleKeydown(e: KeyboardEvent) {
         nextTick(() => {
           textarea.focus();
           textarea.setSelectionRange(start + prefix.length - match[0].length + 1, start + prefix.length - match[0].length + 1);
+
         });
       }
       return;
@@ -1807,6 +1804,7 @@ function insertText(text: string) {
   nextTick(() => {
     textarea.focus();
     textarea.setSelectionRange(start + text.length, start + text.length);
+
   });
 }
 
@@ -2405,29 +2403,6 @@ function toggleDark() {
   nextTick(() => renderMermaidDiagrams());
 }
 
-// 专注模式切换
-function toggleFocusMode() {
-  focusMode.value = !focusMode.value;
-  if (focusMode.value) {
-    // 开启时立即高亮当前行
-    nextTick(updateCurrentLine);
-  } else {
-    // 关闭专注模式时清除背景样式
-    const textareas = document.querySelectorAll('.editor-input');
-    textareas.forEach((ta) => {
-      (ta as HTMLTextAreaElement).style.background = '';
-    });
-  }
-}
-
-// 打字机模式切换
-function toggleTypewriterMode() {
-  typewriterMode.value = !typewriterMode.value;
-  localStorage.setItem('typewriterMode', String(typewriterMode.value));
-  // 开启的瞬间立即把光标行居中
-  if (typewriterMode.value) nextTick(scrollToCursor);
-}
-
 // 滚动同步切换
 function toggleScrollSync() {
   scrollSync.value = !scrollSync.value;
@@ -2453,12 +2428,6 @@ function getVisiblePreview(): HTMLElement | null {
     if (p.offsetParent !== null) return p;
   }
   return previews[0] || null;
-}
-
-// 读取编辑器真实行高(px),失败兜底 28.8(line-height:1.8 × 16px)
-function getEditorLineHeight(textarea: HTMLTextAreaElement): number {
-  const lh = parseFloat(getComputedStyle(textarea).lineHeight);
-  return Number.isFinite(lh) && lh > 0 ? lh : 28.8;
 }
 
 // 编辑器滚动 -> 同步预览
@@ -2526,49 +2495,6 @@ function updateActiveHeadingFromScroll() {
   if (activeIdx >= 0 && activeIdx < headings.value.length) {
     activeHeadingIndex.value = activeIdx;
   }
-}
-
-// 打字机模式：滚动到光标位置，保持光标行在屏幕垂直居中
-function scrollToCursor() {
-  const textarea = getVisibleEditor();
-  if (!textarea) return;
-  // 预览模式无编辑器,不处理
-  if (viewMode.value === 'preview') return;
-
-  const lineHeight = getEditorLineHeight(textarea);
-  const pos = textarea.selectionStart;
-  const total = textarea.value.length;
-
-  // 用字符比例估算光标像素位置(对自动换行的长行容错好)
-  let cursorTop = 0;
-  if (total > 0) {
-    const before = textarea.value.substring(0, pos);
-    const ratio = before.length / total;
-    const scrollMax = textarea.scrollHeight - textarea.clientHeight;
-    cursorTop = ratio * scrollMax;
-  }
-
-  // 让光标行居中
-  const textareaHeight = textarea.clientHeight;
-  const scrollTo = cursorTop - (textareaHeight / 2) + (lineHeight / 2);
-  textarea.scrollTop = Math.max(0, scrollTo);
-}
-
-// 更新当前行号并应用高亮
-function updateCurrentLine() {
-  const textarea = getVisibleEditor();
-  if (!textarea || !activeTab.value) return;
-  if (viewMode.value === 'preview') return;
-  const pos = textarea.selectionStart;
-  const before = textarea.value.substring(0, pos);
-  currentLine.value = before.split('\n').length;
-
-  const lineHeight = getEditorLineHeight(textarea);
-  // textarea 背景不随文本滚动,用 scrollTop 修正高亮条到当前视觉位置
-  const highlightPos = (currentLine.value - 1) * lineHeight - textarea.scrollTop;
-  // 深浅主题分别用更高对比的高亮色,确保肉眼可见
-  const color = isDark.value ? 'rgba(96, 165, 250, 0.22)' : 'rgba(59, 130, 246, 0.18)';
-  textarea.style.background = `linear-gradient(transparent ${highlightPos}px, ${color} ${highlightPos}px, ${color} ${highlightPos + lineHeight}px, transparent ${highlightPos + lineHeight}px)`;
 }
 
 function startResize() {
@@ -2872,16 +2798,6 @@ onMounted(async () => {
         e.preventDefault();
         toggleScrollSync();
       }
-      // F8 切换专注模式
-      if (e.key === "F8") {
-        e.preventDefault();
-        toggleFocusMode();
-      }
-      // F9 切换打字机模式
-      if (e.key === "F9") {
-        e.preventDefault();
-        toggleTypewriterMode();
-      }
       // F1 快捷键说明
       if (e.key === "F1") {
         e.preventDefault();
@@ -2912,14 +2828,6 @@ onMounted(async () => {
       } else {
         selectedCount.value = 0;
       }
-
-      if (focusMode.value) {
-        updateCurrentLine();
-      }
-      // 打字机模式：光标位置变化时自动滚动
-      if (typewriterMode.value) {
-        scrollToCursor();
-      }
     });
 
     // 滚动同步：监听编辑器和预览区的滚动事件
@@ -2931,8 +2839,6 @@ onMounted(async () => {
         if (editorScrollTimer) cancelAnimationFrame(editorScrollTimer);
         editorScrollTimer = requestAnimationFrame(() => {
           syncPreviewFromEditor();
-          // 专注模式:textarea 背景不随文本滚动,滚动时重画当前行高亮
-          if (focusMode.value) updateCurrentLine();
         });
       } else if (target.classList?.contains("preview-area") || target.closest?.(".preview-area")) {
         const preview = target.closest?.(".preview-area") as HTMLElement || target;
@@ -3466,7 +3372,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Editor -->
-      <div class="flex-1 overflow-hidden editor-area" :class="{ 'focus-mode': focusMode }">
+      <div class="flex-1 overflow-hidden editor-area">
         <div v-show="!showPreview && !showSplit" class="w-full h-full">
           <textarea
             :value="activeTab?.content"
@@ -3517,8 +3423,6 @@ onUnmounted(() => {
         :class="scrollSync ? 'text-blue-500 cursor-pointer hover:text-blue-600' : 'text-gray-400 dark:text-gray-500 cursor-pointer hover:text-gray-500 dark:hover:text-gray-400'"
         :title="scrollSync ? '滚动同步已开启 (F7)' : '滚动同步已暂停 (F7)'"
       >🔗 {{ scrollSync ? '同步' : '已暂停' }}</span>
-      <span v-if="typewriterMode" class="text-blue-500" title="打字机模式 (F9)">⌨️ 打字机</span>
-      <span v-if="focusMode" class="text-purple-500" title="专注模式 (F8)">🎯 专注</span>
       <span class="ml-auto text-gray-400 dark:text-gray-500">自动保存: 30s</span>
     </div>
 
@@ -3570,8 +3474,8 @@ onUnmounted(() => {
           <div class="about-name">InkStone MD</div>
           <div class="about-version">版本 {{ appVersion }}</div>
           <p class="about-desc">轻量、优雅的桌面 Markdown 编辑器</p>
-          <p class="about-meta">技术栈:Tauri 2 + Vue 3</p>
-          <p class="about-meta">许可证:GPL-3.0</p>
+          <p class="about-meta">技术栈: Tauri 2 + Vue 3</p>
+          <p class="about-meta">许可证: GPL-3.0</p>
         </div>
       </div>
     </div>
@@ -4037,15 +3941,6 @@ onUnmounted(() => {
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
-}
-
-/* 专注模式样式 */
-.focus-mode .editor-input {
-  line-height: 1.8;
-}
-
-.focus-mode .editor-input::placeholder {
-  color: transparent;
 }
 
 /* Mermaid diagram styles */
