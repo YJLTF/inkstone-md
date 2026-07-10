@@ -194,6 +194,24 @@ inkstone-md/
 
 ## 版本记录
 
+### [1.4.0] - 架构治理与 PDF 导出修复
+
+聚焦两大任务:修复 PDF 导出顽疾 + 拆分 App.vue 组件化。详见 [ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md)。
+
+#### 🐛 修复
+- **PDF 导出彻底重做**:改用隐藏 iframe 打印方案,彻底解决三个顽疾:
+  - 状态栏/工具栏/侧边栏不再泄漏到 PDF(iframe 内仅含文档正文)
+  - 超长文档不再被裁切(iframe 自然流式排版,完整分页)
+  - 页眉不再显示 "InkStone MD"(iframe 文档 title 为空)
+- 更新打印提示文案,引导用户关闭页眉页脚获得纯净 PDF
+
+#### 🏗️ 重构
+- **App.vue 组件化拆分**:4400 行 → ~3000 行,新增 `src/components/` 与 `src/types/`、`src/utils.ts`、`src/constants/` 目录
+  - 提取 8 个 SFC 组件:`TheToolbar`、`TheTabBar`、`EditorPane`、`SearchPanel`、`TheStatusBar`、`ShortcutsModal`、`AboutModal`、`PrintHint`
+  - 提取类型声明到 `types/index.ts`、纯工具函数到 `utils.ts`、导出 CSS 常量到 `constants/exportCss.ts`
+  - 共享 modal 样式移入全局 `style.css`,`:deep` 富内容样式随 `EditorPane` 组件迁移
+- 三处 version 同步到 `1.4.0`
+
 ### [1.3.0] - 功能补全与体验修复
 
 聚焦用户反馈的三个问题:补齐纯编辑模式、原生菜单栏增加快捷键与关于。详见 [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)。
