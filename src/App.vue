@@ -22,7 +22,7 @@ import {
   List, ListOrdered, SquareCheck, Quote,
   Image, Link, Sigma, Code2, Table, ListTree,
   FileCode, Printer,
-  Columns2, Eye, Pencil, PanelLeft, Plus, X,
+  Columns2, Eye, Pencil,
   Sun, Moon, MoreHorizontal, Feather,
 } from "@lucide/vue";
 
@@ -32,6 +32,8 @@ import ShortcutsModal from './components/ShortcutsModal.vue';
 import AboutModal from './components/AboutModal.vue';
 import PrintHint from './components/PrintHint.vue';
 import TheStatusBar from './components/TheStatusBar.vue';
+import SearchPanel from './components/SearchPanel.vue';
+import TheTabBar from './components/TheTabBar.vue';
 
 const md = new MarkdownIt({
   html: true,
@@ -3076,66 +3078,29 @@ onUnmounted(() => {
     <PrintHint :visible="showPrintHint" @dismiss="dismissPrintHint" />
 
     <!-- Search Panel -->
-    <div
-      v-show="showSearch"
-      class="search-panel flex items-center gap-2 px-3 py-2 border-b bg-gray-100 dark:bg-gray-800 dark:border-gray-700"
-    >
-      <input
-        v-model="searchQuery"
-        type="text"
-        placeholder="搜索..."
-        class="search-input px-2 py-1 text-sm border rounded flex-1 max-w-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-        @keydown.enter="searchNext"
-      />
-      <input
-        v-model="replaceQuery"
-        type="text"
-        placeholder="替换为..."
-        class="px-2 py-1 text-sm border rounded flex-1 max-w-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-        @keydown.enter="replaceCurrent"
-      />
-      <span class="text-xs text-gray-500 dark:text-gray-400">
-        {{ searchMatches.length > 0 ? `${currentMatchIndex + 1}/${searchMatches.length}` : '0/0' }}
-      </span>
-      <button @click="searchPrev" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">↑ 上一条</button>
-      <button @click="searchNext" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">↓ 下一条</button>
-      <button @click="replaceCurrent" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">替换</button>
-      <button @click="replaceAll" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">全部替换</button>
-      <button @click="closeSearch" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">× 关闭</button>
-    </div>
+    <SearchPanel
+      v-model:search-query="searchQuery"
+      v-model:replace-query="replaceQuery"
+      :visible="showSearch"
+      :match-count="searchMatches.length"
+      :current-index="currentMatchIndex"
+      @next="searchNext"
+      @prev="searchPrev"
+      @replace-current="replaceCurrent"
+      @replace-all="replaceAll"
+      @close="closeSearch"
+    />
 
     <!-- Tabs -->
-    <div class="tab-bar flex items-center gap-1 px-2 py-1 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 overflow-x-auto">
-      <button
-        @click="toggleSidebar"
-        class="tab-icon-btn"
-        :class="{ active: showSidebar }"
-        title="文件树 (Ctrl+B)"
-      >
-        <PanelLeft :size="16" />
-      </button>
-      <div
-        v-for="tab in tabs"
-        :key="tab.id"
-        @click="setActiveTab(tab.id)"
-        @auxclick="(e: MouseEvent) => { if (e.button === 1) closeTab(tab.id, e); }"
-        class="tab-item"
-        :class="{ active: tab.id === activeTabId }"
-      >
-        <span class="max-w-32 truncate">{{ tab.name }}</span>
-        <span v-if="!tab.saved" class="tab-unsaved" title="未保存"></span>
-        <button
-          @click.stop="closeTab(tab.id, $event)"
-          class="tab-close"
-          title="关闭"
-        >
-          <X :size="12" />
-        </button>
-      </div>
-      <button @click="createNewTab()" class="tab-icon-btn" title="新建标签 (Ctrl+N)">
-        <Plus :size="14" />
-      </button>
-    </div>
+    <TheTabBar
+      :tabs="tabs"
+      :active-tab-id="activeTabId"
+      :show-sidebar="showSidebar"
+      @toggle-sidebar="toggleSidebar"
+      @set-active="setActiveTab"
+      @close-tab="closeTab"
+      @new-tab="createNewTab()"
+    />
 
     <!-- Main Content -->
     <div class="flex-1 flex overflow-hidden">
@@ -3622,113 +3587,6 @@ onUnmounted(() => {
 }
 
 /* Tab 栏 */
-.tab-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  background: transparent;
-  border: none;
-  color: #6b7280;
-  cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
-  flex-shrink: 0;
-}
-.tab-icon-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #111827;
-}
-.tab-icon-btn.active {
-  background: rgba(0, 0, 0, 0.08);
-  color: #2563eb;
-}
-.dark .tab-icon-btn {
-  color: #9ca3af;
-}
-.dark .tab-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #f3f4f6;
-}
-.dark .tab-icon-btn.active {
-  background: rgba(255, 255, 255, 0.1);
-  color: #93c5fd;
-}
-
-.tab-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px 0 12px;
-  border-radius: 5px;
-  font-size: 13px;
-  cursor: pointer;
-  color: #4b5563;
-  background: transparent;
-  border-bottom: 2px solid transparent;
-  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
-  flex-shrink: 0;
-  position: relative;
-  user-select: none;
-}
-.tab-item:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #111827;
-}
-.tab-item.active {
-  background: #ffffff;
-  color: #111827;
-  border-bottom-color: #2563eb;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
-.tab-item:hover .tab-close {
-  opacity: 1;
-}
-.dark .tab-item {
-  color: #9ca3af;
-}
-.dark .tab-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #f3f4f6;
-}
-.dark .tab-item.active {
-  background: #1f2937;
-  color: #f3f4f6;
-  border-bottom-color: #60a5fa;
-}
-
-.tab-unsaved {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
-  flex-shrink: 0;
-}
-
-.tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 150ms ease, background-color 100ms ease, color 100ms ease;
-}
-.tab-close:hover {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-}
-.tab-item.active .tab-close {
-  opacity: 0.6;
-}
 
 /* 全局过渡:暗色/主题切换时不抖 */
 .toolbar,
