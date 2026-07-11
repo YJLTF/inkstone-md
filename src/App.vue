@@ -15,32 +15,18 @@ import katexCss from "katex/dist/katex.min.css?raw";
 import hljsLightCss from "highlight.js/styles/github.css?raw";
 import hljsDarkCss from "highlight.js/styles/github-dark.css?raw";
 import mermaidJs from "mermaid/dist/mermaid.min.js?raw";
-import {
-  FilePlus, FolderOpen, Folder, Save,
-  Heading1, Heading2, Heading3,
-  Bold, Italic, Strikethrough, Code,
-  List, ListOrdered, SquareCheck, Quote,
-  Image, Link, Sigma, Code2, Table, ListTree,
-  FileCode, Printer,
-  Columns2, Eye, Pencil, PanelLeft, Plus, X,
-  Sun, Moon, MoreHorizontal, Feather,
-} from "@lucide/vue";
 
-interface FileEntry {
-  name: string;
-  path: string;
-  is_dir: boolean;
-  is_open: boolean;
-  children?: FileEntry[];
-}
-
-interface Tab {
-  id: string;
-  name: string;
-  path: string | null;
-  content: string;
-  saved: boolean;
-}
+import type { FileEntry, Tab, Heading, ThemeName, ViewMode, ContextMenuState, RenamingState, DocumentAsset, ImageAlign, SidebarMode, ThemeOption } from './types';
+import { isAbsolutePath, posixNormalize, slugify, escapeHtml, formatBytes, getFileName, getMimeFromExt, bytesToBase64, fetchAsDataUri } from './utils';
+import ShortcutsModal from './components/ShortcutsModal.vue';
+import AboutModal from './components/AboutModal.vue';
+import PrintHint from './components/PrintHint.vue';
+import TheStatusBar from './components/TheStatusBar.vue';
+import SearchPanel from './components/SearchPanel.vue';
+import TheTabBar from './components/TheTabBar.vue';
+import TheToolbar from './components/TheToolbar.vue';
+import EditorPane from './components/EditorPane.vue';
+import { EXPORT_BASE_CSS, PRINT_CSS } from './constants/exportCss';
 
 const md = new MarkdownIt({
   html: true,
@@ -112,19 +98,12 @@ const tabs = ref<Tab[]>([{
 }]);
 const activeTabId = ref(tabs.value[0].id);
 
-interface Heading {
-  level: number;
-  text: string;
-  line: number;
-}
-
 const showSidebar = ref(false);
-const sidebarMode = ref<'tree' | 'outline' | 'recent' | 'assets'>('outline');
+const sidebarMode = ref<SidebarMode>('outline');
 const sidebarWidth = ref(280); // 增加默认宽度以容纳按钮
 const isResizing = ref(false);
 const isDark = ref(localStorage.getItem('isDark') === 'true');
-type ThemeName = "inkstone" | "github" | "onedark" | "typora";
-const THEME_OPTIONS: { value: ThemeName; label: string; forceDark?: boolean }[] = [
+const THEME_OPTIONS: ThemeOption[] = [
   { value: "inkstone", label: "InkStone" },
   { value: "github", label: "GitHub" },
   { value: "onedark", label: "One Dark", forceDark: true },
@@ -152,7 +131,6 @@ function setTheme(name: ThemeName) {
     nextTick(() => renderMermaidDiagrams());
   }
 }
-type ViewMode = 'edit' | 'split' | 'preview';
 const viewMode = ref<ViewMode>((localStorage.getItem('viewMode') as ViewMode) || 'split');
 // 由 viewMode 派生的布尔值,保持模板/下游读取不变(只读,不可直接赋值)
 const showSplit = computed(() => viewMode.value === 'split');
@@ -167,28 +145,11 @@ const scrollSync = ref(localStorage.getItem('scrollSync') !== 'false');
 let syncingFrom: 'editor' | 'preview' | null = null;
 const activeHeadingIndex = ref(-1);
 
-const toolbarRef = ref<HTMLElement | null>(null);
-const overflowLevel = ref<0 | 1 | 2>(0);
-const overflowMenuOpen = ref(false);
-
-function updateOverflow() {
-  const w = toolbarRef.value?.clientWidth ?? 0;
-  if (w > 0 && w < 820) overflowLevel.value = 2;
-  else if (w > 0 && w < 1080) overflowLevel.value = 1;
-  else overflowLevel.value = 0;
-}
 const workspacePath = ref<string | null>(null);
 const fileTree = ref<FileEntry[]>([]);
 const autoSaveInterval = ref<number | null>(null);
 
 // 右键菜单状态
-interface ContextMenuState {
-  visible: boolean;
-  x: number;
-  y: number;
-  target: FileEntry | null;
-  parentPath: string | null;
-}
 const contextMenu = ref<ContextMenuState>({
   visible: false,
   x: 0,
@@ -198,12 +159,7 @@ const contextMenu = ref<ContextMenuState>({
 });
 
 // 重命名状态
-const renaming = ref<{
-  active: boolean;
-  path: string;
-  originalName: string;
-  input: string;
-}>({
+const renaming = ref<RenamingState>({
   active: false,
   path: '',
   originalName: '',
@@ -245,13 +201,6 @@ function clearRecentFiles() {
 }
 
 // 当前文档中引用的资源(图为主)列表
-interface DocumentAsset {
-  raw: string;
-  name: string;
-  relative: string;
-  resolved: string;
-  exists: boolean;
-}
 
 const assetExistsCache = new Map<string, boolean>();
 
@@ -428,11 +377,6 @@ async function getFileSize(p: string): Promise<number> {
   }
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
 
 async function compressAsset(asset: DocumentAsset) {
   if (isRemoteAsset(asset.raw)) {
@@ -505,9 +449,6 @@ async function compressAsset(asset: DocumentAsset) {
   }
 }
 
-function getFileName(path: string): string {
-  return path.split(/[/\\]/).pop() ?? path;
-}
 
 // 拖拽状态
 const isDragging = ref(false);
@@ -610,23 +551,7 @@ const selectedCount = ref(0);
 // ---- 图片路径预处理 / 工具栏包装 ----
 
 const IMAGE_SCALES = [25, 50, 75, 100] as const;
-type ImageAlign = "left" | "center" | "right";
 
-function isAbsolutePath(p: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("\\\\") || p.startsWith("/");
-}
-
-function posixNormalize(p: string): string {
-  const isAbs = p.startsWith("/");
-  const parts = p.split("/");
-  const out: string[] = [];
-  for (const part of parts) {
-    if (part === "" || part === ".") continue;
-    if (part === "..") out.pop();
-    else out.push(part);
-  }
-  return (isAbs ? "/" : "") + out.join("/");
-}
 
 function toTauriAssetUrl(src: string, currentFilePath: string | null): string {
   if (/^(https?:|data:|blob:|tauri:|asset:)/i.test(src)) return src;
@@ -701,22 +626,6 @@ function preprocessToc(content: string, heads: Heading[]): string {
   );
 }
 
-function slugify(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w\u4e00-\u9fa5-]/g, '')
-    .replace(/-+/g, '-');
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
 function addHeadingIds(html: string, heads: Heading[]): string {
   const used = new Map<string, number>();
@@ -1987,45 +1896,6 @@ function captureCurrentTheme(): {
   };
 }
 
-function getMimeFromExt(ext: string): string {
-  const map: Record<string, string> = {
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    gif: "image/gif",
-    webp: "image/webp",
-    svg: "image/svg+xml",
-    bmp: "image/bmp",
-    ico: "image/x-icon",
-  };
-  return map[ext.toLowerCase()] || "application/octet-stream";
-}
-
-function bytesToBase64(bytes: number[]): string {
-  const arr = new Uint8Array(bytes);
-  let binary = "";
-  const chunk = 8192;
-  for (let i = 0; i < arr.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, Array.from(arr.subarray(i, i + chunk)));
-  }
-  return btoa(binary);
-}
-
-async function fetchAsDataUri(url: string): Promise<string | null> {
-  try {
-    const resp = await fetch(url, { mode: "cors" });
-    if (!resp.ok) return null;
-    const blob = await resp.blob();
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 把 markdown 中的本地图片内联为 data URI(base64),网络图片尝试 fetch 内联。
@@ -2120,177 +1990,6 @@ function renderHTMLForExport(source: string): string {
   return html;
 }
 
-const EXPORT_BASE_CSS = `
-:root {
-  font-family: var(--ink-font, 'Segoe UI', system-ui, -apple-system, 'Microsoft YaHei', 'PingFang SC', sans-serif);
-  font-size: 16px;
-  line-height: 1.7;
-  color: var(--ink-fg, #1a1a1a);
-  background: var(--ink-bg, #fafafa);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { padding: 2rem 1.5rem; }
-.markdown-body { max-width: 820px; margin: 0 auto; line-height: 1.7; color: inherit; word-wrap: break-word; }
-.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
-  font-weight: 600; line-height: 1.3; margin-top: 1.6em; margin-bottom: 0.8em; letter-spacing: -0.01em; scroll-margin-top: 80px; color: inherit;
-}
-.markdown-body h1 { font-size: 2.25em; font-weight: 700; padding-bottom: 0.4em; border-bottom: 2px solid #e5e7eb; margin-top: 0.4em; }
-.markdown-body h2 { font-size: 1.65em; padding-bottom: 0.3em; border-bottom: 1px solid #e5e7eb; }
-.markdown-body h3 { font-size: 1.35em; position: relative; padding-left: 12px; }
-.markdown-body h3::before { content: ''; position: absolute; left: 0; top: 0.25em; bottom: 0.25em; width: 3px; border-radius: 2px; background: #3b82f6; }
-.markdown-body h4 { font-size: 1.1em; color: #374151; }
-.markdown-body h5, .markdown-body h6 { font-size: 1em; color: #6b7280; }
-.markdown-body h1 + p, .markdown-body h2 + p, .markdown-body h3 + p { margin-top: 0.4em; }
-.markdown-body p { margin: 1em 0 1.1em; }
-.markdown-body ul, .markdown-body ol { margin: 1em 0; padding-left: 1.6em; }
-.markdown-body li { margin: 0.4em 0; line-height: 1.7; }
-.markdown-body li > p { margin: 0.4em 0; }
-.markdown-body ul ul, .markdown-body ul ol, .markdown-body ol ul, .markdown-body ol ol { margin: 0.4em 0; }
-.markdown-body ul { list-style: none; padding-left: 1.4em; }
-.markdown-body ul > li { position: relative; padding-left: 0.2em; }
-.markdown-body ul > li::before { content: ''; position: absolute; left: -1em; top: 0.65em; width: 6px; height: 6px; border-radius: 50%; background: #6b7280; }
-.markdown-body ul ul > li::before { width: 5px; height: 5px; background: transparent; border: 1.5px solid #6b7280; }
-.markdown-body ul ul ul > li::before { width: 5px; height: 5px; border-radius: 1px; background: #6b7280; border: none; }
-.markdown-body ol { list-style-type: decimal; }
-.markdown-body ol li::marker { color: #6b7280; font-weight: 500; }
-.markdown-body code { background: rgba(127,127,127,0.1); padding: 0.15em 0.4em; border-radius: 4px; font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 0.88em; border: 1px solid rgba(127,127,127,0.12); color: inherit; }
-.markdown-body pre { background: rgba(127,127,127,0.06); padding: 1.2em; border-radius: 8px; overflow-x: auto; margin: 1.2em 0; border: 1px solid rgba(127,127,127,0.1); position: relative; }
-.markdown-body pre code { background: transparent; padding: 0; border: none; font-size: 0.9em; line-height: 1.6; }
-.markdown-body pre .line { display: block; min-height: 1.5em; }
-.markdown-body blockquote { border-left: 4px solid #d1d5db; padding: 0.6em 1.2em; color: #6b7280; margin: 1.2em 0; background: rgba(127,127,127,0.05); border-radius: 0 6px 6px 0; }
-.markdown-body blockquote p { margin: 0.4em 0; }
-.markdown-body blockquote p:first-child { margin-top: 0; }
-.markdown-body blockquote p:last-child { margin-bottom: 0; }
-.markdown-body table { border-collapse: separate; border-spacing: 0; width: 100%; margin: 1.2em 0; border-radius: 6px; overflow: hidden; border: 1px solid #e5e7eb; }
-.markdown-body th, .markdown-body td { padding: 0.6em 1em; text-align: left; border-bottom: 1px solid #e5e7eb; border-right: 1px solid #e5e7eb; }
-.markdown-body th:last-child, .markdown-body td:last-child { border-right: none; }
-.markdown-body tr:last-child td { border-bottom: none; }
-.markdown-body th { background: rgba(127,127,127,0.05); font-weight: 600; border-bottom: 2px solid #d1d5db; }
-.markdown-body tr:nth-child(even) td { background: rgba(127,127,127,0.02); }
-.markdown-body a { color: #2563eb; text-decoration: none; text-underline-offset: 2px; transition: color 0.15s ease; }
-.markdown-body a:hover { color: #1d4ed8; text-decoration: underline; }
-.markdown-body hr { border: none; height: 1px; background: linear-gradient(to right, transparent, #d1d5db, transparent); margin: 2.5em 0; }
-.markdown-body img { max-width: 100%; height: auto; margin: 1em 0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-.markdown-body li.task-list-item { list-style: none; position: relative; padding-left: 0.2em; }
-.markdown-body li.task-list-item::before { display: none; }
-.markdown-body li.task-list-item input[type="checkbox"] { position: absolute; left: -1.4em; top: 0.4em; width: 16px; height: 16px; appearance: none; -webkit-appearance: none; border: 1.5px solid #d1d5db; border-radius: 3px; background: #fff; cursor: pointer; transition: all 0.15s ease; }
-.markdown-body li.task-list-item input[type="checkbox"]:checked { background: #3b82f6; border-color: #3b82f6; }
-.markdown-body .mermaid-diagram { text-align: center; margin: 1.2em 0; padding: 1em; background: rgba(127,127,127,0.04); border-radius: 8px; border: 1px solid rgba(127,127,127,0.08); }
-.markdown-body .mermaid-diagram svg { max-width: 100%; height: auto; }
-.markdown-body .mermaid-error { color: #b91c1c; font-size: 0.9em; padding: 0.5em; }
-.katex-display { margin: 1.2em 0; overflow-x: auto; padding: 0.5em 0; }
-
-/* InkStone theme */
-[data-theme="inkstone"] .markdown-body h3::before { background: #3b82f6; }
-
-/* GitHub theme */
-[data-theme="github"] { color: #1f2328; background: #ffffff; }
-[data-theme="github"].dark, .dark[data-theme="github"], html[data-theme="github"].dark { color: #e6edf3; background: #0d1117; }
-[data-theme="github"] .markdown-body h1, [data-theme="github"] .markdown-body h2 { border-bottom-color: #d1d9e0; }
-[data-theme="github"].dark .markdown-body h1, [data-theme="github"].dark .markdown-body h2 { border-bottom-color: #3d444d; }
-[data-theme="github"] .markdown-body h3::before { background: #0969da; }
-[data-theme="github"].dark .markdown-body h3::before { background: #58a6ff; }
-[data-theme="github"] .markdown-body code { background: #eff1f3; color: #1f2328; border-color: #d1d9e0; }
-[data-theme="github"].dark .markdown-body code { background: #161b22; color: #e6edf3; border-color: #3d444d; }
-[data-theme="github"] .markdown-body pre { background: #f6f8fa; border-color: #d1d9e0; }
-[data-theme="github"].dark .markdown-body pre { background: #161b22; border-color: #3d444d; }
-[data-theme="github"] .markdown-body blockquote { border-left-color: #d1d9e0; color: #59636e; background: #f6f8fa; }
-[data-theme="github"].dark .markdown-body blockquote { border-left-color: #3d444d; color: #9198a1; background: #161b22; }
-[data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body tr:nth-child(even) td { background: #f6f8fa; }
-[data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body tr:nth-child(even) td { background: #161b22; }
-[data-theme="github"] .markdown-body th, [data-theme="github"] .markdown-body td { border-color: #d1d9e0; }
-[data-theme="github"].dark .markdown-body th, [data-theme="github"].dark .markdown-body td { border-color: #3d444d; }
-[data-theme="github"] .markdown-body table { border-color: #d1d9e0; }
-[data-theme="github"].dark .markdown-body table { border-color: #3d444d; }
-[data-theme="github"] .markdown-body a { color: #0969da; }
-[data-theme="github"].dark .markdown-body a { color: #58a6ff; }
-[data-theme="github"] .markdown-body a:hover { color: #0550ae; }
-[data-theme="github"].dark .markdown-body a:hover { color: #79c0ff; }
-[data-theme="github"] .markdown-body hr { background: linear-gradient(to right, transparent, #d1d9e0, transparent); }
-[data-theme="github"].dark .markdown-body hr { background: linear-gradient(to right, transparent, #3d444d, transparent); }
-[data-theme="github"] .markdown-body ul > li::before { background: #59636e; }
-[data-theme="github"].dark .markdown-body ul > li::before { background: #9198a1; }
-[data-theme="github"] .markdown-body ul ul > li::before { border-color: #59636e; }
-[data-theme="github"].dark .markdown-body ul ul > li::before { border-color: #9198a1; }
-[data-theme="github"] .markdown-body ul ul ul > li::before { background: #59636e; }
-[data-theme="github"].dark .markdown-body ul ul ul > li::before { background: #9198a1; }
-
-/* One Dark theme */
-[data-theme="onedark"] { color: #abb2bf; background: #282c34; font-family: 'Source Code Pro', 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace; }
-[data-theme="onedark"] .markdown-body { line-height: 1.65; }
-[data-theme="onedark"] .markdown-body h1, [data-theme="onedark"] .markdown-body h2 { border-bottom-color: #3e4452; color: #e5c07b; }
-[data-theme="onedark"] .markdown-body h3, [data-theme="onedark"] .markdown-body h4, [data-theme="onedark"] .markdown-body h5, [data-theme="onedark"] .markdown-body h6 { color: #e5c07b; }
-[data-theme="onedark"] .markdown-body h3::before { background: #e5c07b; }
-[data-theme="onedark"] .markdown-body code { background: #3e4452; color: #e06c75; border-color: #4b5263; }
-[data-theme="onedark"] .markdown-body pre { background: #21252b; color: #abb2bf; border-color: #3e4452; }
-[data-theme="onedark"] .markdown-body pre code { color: #abb2bf; }
-[data-theme="onedark"] .markdown-body blockquote { border-left-color: #3e4452; color: #7f848e; background: rgba(255,255,255,0.02); }
-[data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body tr:nth-child(even) td { background: #21252b; }
-[data-theme="onedark"] .markdown-body th, [data-theme="onedark"] .markdown-body td { border-color: #3e4452; }
-[data-theme="onedark"] .markdown-body table { border-color: #3e4452; }
-[data-theme="onedark"] .markdown-body a { color: #61afef; }
-[data-theme="onedark"] .markdown-body a:hover { color: #90caf9; }
-[data-theme="onedark"] .markdown-body hr { background: linear-gradient(to right, transparent, #3e4452, transparent); }
-[data-theme="onedark"] .markdown-body ul > li::before { background: #7f848e; }
-[data-theme="onedark"] .markdown-body ul ul > li::before { border-color: #7f848e; }
-[data-theme="onedark"] .markdown-body ul ul ul > li::before { background: #7f848e; }
-[data-theme="onedark"] .markdown-body .mermaid-diagram { background: #21252b; border-color: #3e4452; }
-
-/* Typora theme */
-[data-theme="typora"] { color: #2c2c2c; background: #ffffff; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', 'SimSun', 'Songti SC', serif; }
-[data-theme="typora"].dark { color: #d0d0d0; background: #1f1f1f; font-family: 'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', 'SimSun', 'Songti SC', serif; }
-[data-theme="typora"] .markdown-body { max-width: 760px; font-size: 1.05rem; line-height: 1.8; }
-[data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2, [data-theme="typora"] .markdown-body h3, [data-theme="typora"] .markdown-body h4, [data-theme="typora"] .markdown-body h5, [data-theme="typora"] .markdown-body h6 { font-family: inherit; color: #1a1a1a; font-weight: 700; }
-[data-theme="typora"].dark .markdown-body h1, [data-theme="typora"].dark .markdown-body h2, [data-theme="typora"].dark .markdown-body h3, [data-theme="typora"].dark .markdown-body h4, [data-theme="typora"].dark .markdown-body h5, [data-theme="typora"].dark .markdown-body h6 { color: #f0f0f0; }
-[data-theme="typora"] .markdown-body h1, [data-theme="typora"] .markdown-body h2 { border-bottom: 1px solid #ececec; }
-[data-theme="typora"].dark .markdown-body h1, [data-theme="typora"].dark .markdown-body h2 { border-bottom-color: #2c2c2c; }
-[data-theme="typora"] .markdown-body h3::before { background: #b3594a; width: 4px; border-radius: 2px; }
-[data-theme="typora"].dark .markdown-body h3::before { background: #e8a292; }
-[data-theme="typora"] .markdown-body code { background: #f4f0ec; color: #b3594a; font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; border-color: #e8e2db; }
-[data-theme="typora"].dark .markdown-body code { background: #2a2a2a; color: #e8a292; border-color: #3a3a3a; }
-[data-theme="typora"] .markdown-body pre { background: #faf8f5; border: 1px solid #ececec; }
-[data-theme="typora"].dark .markdown-body pre { background: #252525; border-color: #2c2c2c; }
-[data-theme="typora"] .markdown-body blockquote { border-left-color: #c9c2b8; color: #777; font-style: italic; background: transparent; }
-[data-theme="typora"].dark .markdown-body blockquote { border-left-color: #555; color: #aaa; background: transparent; }
-[data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body tr:nth-child(even) td { background: #f4f0ec; }
-[data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body tr:nth-child(even) td { background: #2a2a2a; }
-[data-theme="typora"] .markdown-body th, [data-theme="typora"] .markdown-body td { border-color: #ececec; }
-[data-theme="typora"].dark .markdown-body th, [data-theme="typora"].dark .markdown-body td { border-color: #2c2c2c; }
-[data-theme="typora"] .markdown-body table { border-color: #ececec; }
-[data-theme="typora"].dark .markdown-body table { border-color: #2c2c2c; }
-[data-theme="typora"] .markdown-body a { color: #b3594a; }
-[data-theme="typora"].dark .markdown-body a { color: #e8a292; }
-[data-theme="typora"] .markdown-body a:hover { color: #924a3d; }
-[data-theme="typora"].dark .markdown-body a:hover { color: #f0b8a8; }
-[data-theme="typora"] .markdown-body hr { background: linear-gradient(to right, transparent, #d4cdc4, transparent); }
-[data-theme="typora"].dark .markdown-body hr { background: linear-gradient(to right, transparent, #3a3a3a, transparent); }
-[data-theme="typora"] .markdown-body ul > li::before { background: #8a827a; }
-[data-theme="typora"].dark .markdown-body ul > li::before { background: #888; }
-[data-theme="typora"] .markdown-body ul ul > li::before { border-color: #8a827a; }
-[data-theme="typora"].dark .markdown-body ul ul > li::before { border-color: #888; }
-[data-theme="typora"] .markdown-body ul ul ul > li::before { background: #8a827a; }
-[data-theme="typora"].dark .markdown-body ul ul ul > li::before { background: #888; }
-`;
-
-const PRINT_CSS = `
-@page { size: A4; margin: 15mm; }
-@media print {
-  body { background: white !important; color: black !important; padding: 0 !important; }
-  .toolbar, .tab-bar, .sidebar, .search-panel, .empty-state, .status-bar, .toolbar-tabs, .tab-icon-btn, .tab-item, .modal-overlay { display: none !important; }
-  .preview-area, .editor-area { border: none !important; padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
-  .markdown-body { max-width: 100% !important; }
-  .ink-image-toolbar, .ink-codeblock-toolbar, .ink-table-toolbar, .mermaid-diagram[data-code] { display: none !important; }
-  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-  h1, h2, h3, h4, h5, h6 { page-break-after: avoid; break-after: avoid; }
-  pre, blockquote, table, img, figure { page-break-inside: avoid; break-inside: avoid; }
-  p, li { orphans: 3; widows: 3; }
-  a { color: inherit !important; text-decoration: none !important; }
-  a[href]::after { content: "" !important; }
-}
-`;
-
 /**
  * 导出 HTML:单文件全内联,完全离线可打开。
  */
@@ -2365,16 +2064,124 @@ ${mermaidJs}
 }
 
 const showPrintHint = ref(localStorage.getItem("pdfHintShown") === "true");
+
+/**
+ * 组装打印用独立 HTML 文档(空 title 避免页眉显示应用名)。
+ */
+function buildPrintHtml(bodyHtml: string, theme: ReturnType<typeof captureCurrentTheme>): string {
+  return `<!DOCTYPE html>
+<html lang="zh-CN" data-theme="${theme.dataTheme}"${theme.isDark ? ' class="dark"' : ""}>
+<head>
+<meta charset="UTF-8">
+<title></title>
+<style>
+:root {
+  --ink-font: ${theme.fontFamily};
+  --ink-bg: ${theme.isDark ? theme.bodyBg : '#ffffff'};
+  --ink-fg: ${theme.isDark ? theme.bodyColor : '#000000'};
+}
+${EXPORT_BASE_CSS}
+${theme.highlightCss}
+${katexCss}
+${PRINT_CSS}
+</style>
+</head>
+<body>
+<div class="markdown-body">${bodyHtml}</div>
+<script>
+${mermaidJs}
+(function() {
+  if (typeof mermaid === 'undefined') return;
+  try {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: ${theme.isDark ? "'dark'" : "'default'"},
+      securityLevel: 'loose',
+      fontFamily: 'inherit'
+    });
+    var diagrams = document.querySelectorAll('.mermaid-diagram[data-code]');
+    var pending = diagrams.length;
+    if (pending === 0) { window.dispatchEvent(new Event('mermaid-ready')); return; }
+    diagrams.forEach(function(el, i) {
+      var code = decodeURIComponent(el.getAttribute('data-code') || '');
+      if (!code) { if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready')); return; }
+      var id = 'm-' + Date.now() + '-' + i;
+      mermaid.render(id, code).then(function(r) {
+        el.innerHTML = r.svg;
+        if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready'));
+      }).catch(function(e) {
+        el.innerHTML = '<pre class="mermaid-error">Mermaid 渲染失败: ' + (e.message || e) + '</pre>';
+        if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready'));
+      });
+    });
+  } catch (e) {
+    console.error('Mermaid init failed:', e);
+    window.dispatchEvent(new Event('mermaid-ready'));
+  }
+})();
+</` + `script>
+</body>
+</html>`;
+}
+
+/**
+ * 等待 iframe 内图片、字体加载完成。
+ */
+function waitForImagesAndFonts(win: Window): Promise<void> {
+  const imgPromises = Array.from(win.document.images).map((img) =>
+    img.complete
+      ? Promise.resolve()
+      : new Promise<void>((res) => {
+          img.onload = () => res();
+          img.onerror = () => res();
+        }),
+  );
+  const fontPromise = (win as any).fonts?.ready ?? Promise.resolve();
+  const mermaidPromise = new Promise<void>((res) => {
+    win.addEventListener('mermaid-ready', () => res(), { once: true });
+    setTimeout(() => res(), 5000);
+  });
+  return Promise.all([...imgPromises, fontPromise, mermaidPromise]).then(() => undefined);
+}
+
+/**
+ * 构建隐藏 iframe 并打印纯文档内容(不含应用 chrome)。
+ */
+async function printDocument(): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab) return;
+
+  const withImages = await inlineImagesInMarkdown(tab.content, tab.path);
+  const withToc = preprocessToc(withImages, headings.value);
+  const bodyHtml = renderHTMLForExport(withToc);
+  const theme = captureCurrentTheme();
+  const docHtml = buildPrintHtml(bodyHtml, theme);
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;border:0;';
+  document.body.appendChild(iframe);
+
+  try {
+    const doc = iframe.contentWindow!.document;
+    doc.open();
+    doc.write(docHtml);
+    doc.close();
+
+    await waitForImagesAndFonts(iframe.contentWindow!);
+
+    iframe.contentWindow!.focus();
+    iframe.contentWindow!.print();
+  } finally {
+    setTimeout(() => iframe.remove(), 2000);
+  }
+}
+
 async function exportPDF() {
   if (!activeTab.value) return;
   showPrintHint.value = false;
   localStorage.setItem("pdfHintShown", "true");
-  // 切到预览模式,等一帧让 mermaid/KaTeX 渲染好,再触发系统打印
-  setViewMode('preview');
-  await nextTick();
-  await new Promise((r) => setTimeout(r, 150));
   try {
-    window.print();
+    await printDocument();
   } catch (e) {
     console.error("打印失败:", e);
   }
@@ -2699,17 +2506,9 @@ onMounted(async () => {
   // 加载最近文件
   loadRecentFiles();
 
-  // 工具栏溢出监听
-  if (toolbarRef.value) {
-    updateOverflow();
-    const ro = new ResizeObserver(() => updateOverflow());
-    ro.observe(toolbarRef.value);
-  }
-
-  // 全局点击隐藏右键菜单/溢出菜单
+  // 全局点击隐藏右键菜单
   document.addEventListener('click', () => {
     hideContextMenu();
-    overflowMenuOpen.value = false;
   });
 
   autoSaveInterval.value = window.setInterval(() => {
@@ -2882,276 +2681,55 @@ onUnmounted(() => {
     </div>
 
     <!-- Toolbar -->
-    <div ref="toolbarRef" class="toolbar flex items-center gap-1 px-2 py-1.5 border-b bg-white dark:bg-gray-900 dark:border-gray-700">
-      <div class="toolbar-brand flex items-center gap-1.5 pr-2 mr-1 select-none">
-        <Feather :size="16" class="text-blue-500" />
-        <span class="font-semibold text-sm text-gray-700 dark:text-gray-200">InkStone</span>
-      </div>
+    <TheToolbar
+      :view-mode="viewMode"
+      :show-split="showSplit"
+      :show-preview="showPreview"
+      :theme-name="themeName"
+      :is-dark="isDark"
+      :theme-options="THEME_OPTIONS"
+      @new-tab="createNewTab()"
+      @open-file="openFile()"
+      @open-folder="openFolder"
+      @save-file="saveFile()"
+      @insert-heading="insertHeading"
+      @insert-format="insertFormat"
+      @insert-text="insertText"
+      @insert-image="insertImage"
+      @export-html="exportHTML"
+      @export-pdf="exportPDF"
+      @set-view-mode="setViewMode"
+      @set-theme="setTheme"
+      @toggle-dark="toggleDark"
+    />
 
-      <div class="toolbar-group">
-        <button @click="createNewTab()" title="新建 (Ctrl+N)" class="toolbar-btn">
-          <FilePlus :size="16" /><span class="toolbar-label">新建</span>
-        </button>
-        <button @click="openFile()" title="打开 (Ctrl+O)" class="toolbar-btn">
-          <FolderOpen :size="16" /><span class="toolbar-label">打开</span>
-        </button>
-        <button @click="openFolder" title="打开文件夹" class="toolbar-btn">
-          <Folder :size="16" /><span class="toolbar-label">文件夹</span>
-        </button>
-        <button @click="saveFile()" title="保存 (Ctrl+S)" class="toolbar-btn">
-          <Save :size="16" /><span class="toolbar-label">保存</span>
-        </button>
-      </div>
-
-      <div class="toolbar-group">
-        <button @click="insertHeading(1)" title="一级标题" class="toolbar-btn">
-          <Heading1 :size="16" />
-        </button>
-        <button @click="insertHeading(2)" title="二级标题" class="toolbar-btn">
-          <Heading2 :size="16" />
-        </button>
-        <button @click="insertHeading(3)" title="三级标题" class="toolbar-btn">
-          <Heading3 :size="16" />
-        </button>
-      </div>
-
-      <div class="toolbar-group">
-        <button @click="insertFormat('**')" title="粗体" class="toolbar-btn">
-          <Bold :size="16" />
-        </button>
-        <button @click="insertFormat('*')" title="斜体" class="toolbar-btn">
-          <Italic :size="16" />
-        </button>
-        <button @click="insertFormat('~~')" title="删除线" class="toolbar-btn">
-          <Strikethrough :size="16" />
-        </button>
-        <button @click="insertFormat('`')" title="行内代码" class="toolbar-btn">
-          <Code :size="16" />
-        </button>
-      </div>
-
-      <div v-show="overflowLevel < 1" class="toolbar-group">
-        <button @click="insertText('- ')" title="无序列表" class="toolbar-btn">
-          <List :size="16" />
-        </button>
-        <button @click="insertText('1. ')" title="有序列表" class="toolbar-btn">
-          <ListOrdered :size="16" />
-        </button>
-        <button @click="insertText('- [ ] ')" title="任务列表" class="toolbar-btn">
-          <SquareCheck :size="16" />
-        </button>
-        <button @click="insertText('> ')" title="引用" class="toolbar-btn">
-          <Quote :size="16" />
-        </button>
-      </div>
-
-      <div v-show="overflowLevel < 2" class="toolbar-group">
-        <button @click="insertImage" title="插入图片" class="toolbar-btn">
-          <Image :size="16" />
-        </button>
-        <button @click="insertText('[链接](url)')" title="链接" class="toolbar-btn">
-          <Link :size="16" />
-        </button>
-        <button @click="insertText('$$')" title="数学公式" class="toolbar-btn">
-          <Sigma :size="16" />
-        </button>
-        <button @click="insertText('```\n\n```')" title="代码块" class="toolbar-btn">
-          <Code2 :size="16" />
-        </button>
-        <button @click="insertText('| 表头 | 表头 |\n|------|------|\n| 单元格 | 单元格 |')" title="表格" class="toolbar-btn">
-          <Table :size="16" />
-        </button>
-        <button @click="insertText('\n[[toc]]\n')" title="插入目录" class="toolbar-btn">
-          <ListTree :size="16" />
-        </button>
-      </div>
-
-      <div v-if="overflowLevel > 0" class="toolbar-group relative" @click.stop>
-        <button
-          @click="overflowMenuOpen = !overflowMenuOpen"
-          title="更多工具"
-          class="toolbar-btn"
-          :class="{ active: overflowMenuOpen }"
-        >
-          <MoreHorizontal :size="16" />
-        </button>
-        <div
-          v-if="overflowMenuOpen"
-          class="overflow-menu absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-1 z-50 min-w-[180px]"
-        >
-          <template v-if="overflowLevel >= 1">
-            <div class="overflow-menu-title">列表</div>
-            <button @click="insertText('- ')" class="overflow-menu-item">
-              <List :size="14" /><span>无序列表</span>
-            </button>
-            <button @click="insertText('1. ')" class="overflow-menu-item">
-              <ListOrdered :size="14" /><span>有序列表</span>
-            </button>
-            <button @click="insertText('- [ ] ')" class="overflow-menu-item">
-              <SquareCheck :size="14" /><span>任务列表</span>
-            </button>
-            <button @click="insertText('> ')" class="overflow-menu-item">
-              <Quote :size="14" /><span>引用</span>
-            </button>
-          </template>
-          <template v-if="overflowLevel >= 2">
-            <div class="overflow-menu-divider"></div>
-            <div class="overflow-menu-title">插入</div>
-            <button @click="insertImage" class="overflow-menu-item">
-              <Image :size="14" /><span>图片</span>
-            </button>
-            <button @click="insertText('[链接](url)')" class="overflow-menu-item">
-              <Link :size="14" /><span>链接</span>
-            </button>
-            <button @click="insertText('$$')" class="overflow-menu-item">
-              <Sigma :size="14" /><span>数学公式</span>
-            </button>
-            <button @click="insertText('```\n\n```')" class="overflow-menu-item">
-              <Code2 :size="14" /><span>代码块</span>
-            </button>
-            <button @click="insertText('| 表头 | 表头 |\n|------|------|\n| 单元格 | 单元格 |')" class="overflow-menu-item">
-              <Table :size="14" /><span>表格</span>
-            </button>
-            <button @click="insertText('\n[[toc]]\n')" class="overflow-menu-item">
-              <ListTree :size="14" /><span>目录</span>
-            </button>
-          </template>
-        </div>
-      </div>
-
-      <div class="flex-1"></div>
-
-      <div class="toolbar-group">
-        <button @click="exportHTML" title="导出 HTML" class="toolbar-btn">
-          <FileCode :size="16" /><span class="toolbar-label">HTML</span>
-        </button>
-        <button @click="exportPDF" title="导出 PDF(系统打印)" class="toolbar-btn">
-          <Printer :size="16" /><span class="toolbar-label">PDF</span>
-        </button>
-      </div>
-
-      <div class="toolbar-group">
-        <button
-          @click="setViewMode('edit')"
-          class="toolbar-btn"
-          :class="{ active: viewMode === 'edit' }"
-          title="编辑视图 (Ctrl+\)"
-        >
-          <Pencil :size="16" />
-        </button>
-        <button
-          @click="setViewMode('split')"
-          class="toolbar-btn"
-          :class="{ active: showSplit }"
-          title="分栏视图"
-        >
-          <Columns2 :size="16" />
-        </button>
-        <button
-          @click="setViewMode('preview')"
-          class="toolbar-btn"
-          :class="{ active: showPreview }"
-          title="预览视图"
-        >
-          <Eye :size="16" />
-        </button>
-      </div>
-
-      <div class="toolbar-group">
-        <select
-          :value="themeName"
-          @change="(e: any) => setTheme(e.target.value)"
-          class="toolbar-select"
-          title="切换主题"
-        >
-          <option v-for="opt in THEME_OPTIONS" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
-        <button
-          @click="toggleDark"
-          class="toolbar-btn"
-          :title="isDark ? '切换到浅色' : '切换到深色'"
-        >
-          <Sun v-if="isDark" :size="16" class="theme-toggle-icon" />
-          <Moon v-else :size="16" class="theme-toggle-icon" />
-        </button>
-      </div>
-    </div>
-
-    <!-- PDF 打印提示(首次使用弹一次,后写入 localStorage 不再弹) -->
-    <div v-if="showPrintHint" class="print-hint" role="alert">
-      <Printer :size="18" class="print-hint-icon" />
-      <div class="print-hint-body flex-1">
-        <strong>PDF 导出说明</strong>
-        系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>(Win10/11 自带)即可另存为 PDF。文字可选可搜索,样式与预览完全一致。
-      </div>
-      <button @click="dismissPrintHint" class="print-hint-close" title="知道了">
-        <X :size="14" />
-      </button>
-    </div>
+    <!-- PDF 打印提示 -->
+    <PrintHint :visible="showPrintHint" @dismiss="dismissPrintHint" />
 
     <!-- Search Panel -->
-    <div
-      v-show="showSearch"
-      class="search-panel flex items-center gap-2 px-3 py-2 border-b bg-gray-100 dark:bg-gray-800 dark:border-gray-700"
-    >
-      <input
-        v-model="searchQuery"
-        type="text"
-        placeholder="搜索..."
-        class="search-input px-2 py-1 text-sm border rounded flex-1 max-w-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-        @keydown.enter="searchNext"
-      />
-      <input
-        v-model="replaceQuery"
-        type="text"
-        placeholder="替换为..."
-        class="px-2 py-1 text-sm border rounded flex-1 max-w-xs dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
-        @keydown.enter="replaceCurrent"
-      />
-      <span class="text-xs text-gray-500 dark:text-gray-400">
-        {{ searchMatches.length > 0 ? `${currentMatchIndex + 1}/${searchMatches.length}` : '0/0' }}
-      </span>
-      <button @click="searchPrev" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">↑ 上一条</button>
-      <button @click="searchNext" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">↓ 下一条</button>
-      <button @click="replaceCurrent" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">替换</button>
-      <button @click="replaceAll" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">全部替换</button>
-      <button @click="closeSearch" class="px-2 py-1 text-sm border rounded hover:bg-gray-200 dark:hover:bg-gray-700">× 关闭</button>
-    </div>
+    <SearchPanel
+      v-model:search-query="searchQuery"
+      v-model:replace-query="replaceQuery"
+      :visible="showSearch"
+      :match-count="searchMatches.length"
+      :current-index="currentMatchIndex"
+      @next="searchNext"
+      @prev="searchPrev"
+      @replace-current="replaceCurrent"
+      @replace-all="replaceAll"
+      @close="closeSearch"
+    />
 
     <!-- Tabs -->
-    <div class="tab-bar flex items-center gap-1 px-2 py-1 border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 overflow-x-auto">
-      <button
-        @click="toggleSidebar"
-        class="tab-icon-btn"
-        :class="{ active: showSidebar }"
-        title="文件树 (Ctrl+B)"
-      >
-        <PanelLeft :size="16" />
-      </button>
-      <div
-        v-for="tab in tabs"
-        :key="tab.id"
-        @click="setActiveTab(tab.id)"
-        @auxclick="(e: MouseEvent) => { if (e.button === 1) closeTab(tab.id, e); }"
-        class="tab-item"
-        :class="{ active: tab.id === activeTabId }"
-      >
-        <span class="max-w-32 truncate">{{ tab.name }}</span>
-        <span v-if="!tab.saved" class="tab-unsaved" title="未保存"></span>
-        <button
-          @click.stop="closeTab(tab.id, $event)"
-          class="tab-close"
-          title="关闭"
-        >
-          <X :size="12" />
-        </button>
-      </div>
-      <button @click="createNewTab()" class="tab-icon-btn" title="新建标签 (Ctrl+N)">
-        <Plus :size="14" />
-      </button>
-    </div>
+    <TheTabBar
+      :tabs="tabs"
+      :active-tab-id="activeTabId"
+      :show-sidebar="showSidebar"
+      @toggle-sidebar="toggleSidebar"
+      @set-active="setActiveTab"
+      @close-tab="closeTab"
+      @new-tab="createNewTab()"
+    />
 
     <!-- Main Content -->
     <div class="flex-1 flex overflow-hidden">
@@ -3372,553 +2950,39 @@ onUnmounted(() => {
       </div>
 
       <!-- Editor -->
-      <div class="flex-1 overflow-hidden editor-area">
-        <div v-show="!showPreview && !showSplit" class="w-full h-full">
-          <textarea
-            :value="activeTab?.content"
-            @input="handleInput"
-            @keydown="handleKeydown"
-            @paste="handlePaste"
-            class="editor-input dark:text-gray-200"
-            placeholder="开始写作..."
-          ></textarea>
-        </div>
-
-        <div v-show="showPreview && !showSplit" class="w-full h-full overflow-y-auto preview-area">
-          <div class="markdown-body" v-html="renderedHTML"></div>
-        </div>
-
-        <div v-show="showSplit" class="w-full h-full flex">
-          <div class="w-1/2 h-full border-r dark:border-gray-700">
-            <textarea
-              :value="activeTab?.content"
-              @input="handleInput"
-              @keydown="handleKeydown"
-              @paste="handlePaste"
-              class="editor-input dark:text-gray-200"
-              placeholder="开始写作..."
-            ></textarea>
-          </div>
-          <div class="w-1/2 h-full overflow-y-auto preview-area bg-white dark:bg-gray-900">
-            <div class="markdown-body" v-html="renderedHTML"></div>
-          </div>
-        </div>
-      </div>
+      <EditorPane
+        :content="activeTab?.content ?? ''"
+        :rendered-html="renderedHTML"
+        :show-split="showSplit"
+        :show-preview="showPreview"
+        @input="handleInput"
+        @keydown="handleKeydown"
+        @paste="handlePaste"
+      />
     </div>
 
     <!-- Status Bar -->
-    <div class="flex items-center gap-4 px-4 py-1 text-xs border-t bg-gray-50 dark:bg-gray-900 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-      <span :class="activeTab?.saved ? 'text-green-500' : 'text-orange-500'">
-        {{ activeTab?.saved ? '✓ 已保存' : '● 未保存' }}
-      </span>
-      <span class="truncate max-w-48" :title="activeTab?.path || '未命名文档'">
-        {{ activeTab?.path ? activeTab.path.split(/[/\\]/).pop() : '未命名文档' }}
-      </span>
-      <span>{{ charCount }} 字符</span>
-      <span>{{ wordCount }} 词</span>
-      <span v-if="selectedCount > 0" class="text-blue-500">选中 {{ selectedCount }} 字</span>
-      <span
-        v-if="showSplit"
-        @click="toggleScrollSync"
-        :class="scrollSync ? 'text-blue-500 cursor-pointer hover:text-blue-600' : 'text-gray-400 dark:text-gray-500 cursor-pointer hover:text-gray-500 dark:hover:text-gray-400'"
-        :title="scrollSync ? '滚动同步已开启 (F7)' : '滚动同步已暂停 (F7)'"
-      >🔗 {{ scrollSync ? '同步' : '已暂停' }}</span>
-      <span class="ml-auto text-gray-400 dark:text-gray-500">自动保存: 30s</span>
-    </div>
+    <TheStatusBar
+      :saved="!!activeTab?.saved"
+      :path="activeTab?.path ?? null"
+      :char-count="charCount"
+      :word-count="wordCount"
+      :selected-count="selectedCount"
+      :show-split="showSplit"
+      :scroll-sync="scrollSync"
+      @toggle-scroll-sync="toggleScrollSync"
+    />
 
     <!-- 快捷键对话框 -->
-    <div
-      v-if="showShortcutsModal"
-      class="modal-overlay"
-      @click.self="showShortcutsModal = false"
-    >
-      <div class="modal-card">
-        <div class="modal-header">
-          <h3>快捷键</h3>
-          <button class="modal-close" title="关闭 (Esc)" @click="showShortcutsModal = false">
-            <X :size="16" />
-          </button>
-        </div>
-        <div class="modal-body">
-          <table class="shortcuts-table">
-            <thead>
-              <tr><th>分组</th><th>快捷键</th><th>功能</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="(s, i) in SHORTCUTS" :key="i">
-                <td class="text-gray-500 dark:text-gray-400">{{ s.group }}</td>
-                <td><code>{{ s.key }}</code></td>
-                <td>{{ s.desc }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+    <ShortcutsModal v-model="showShortcutsModal" :shortcuts="SHORTCUTS" />
 
     <!-- 关于对话框 -->
-    <div
-      v-if="showAboutModal"
-      class="modal-overlay"
-      @click.self="showAboutModal = false"
-    >
-      <div class="modal-card about-card">
-        <div class="modal-header">
-          <h3>关于 InkStone MD</h3>
-          <button class="modal-close" title="关闭 (Esc)" @click="showAboutModal = false">
-            <X :size="16" />
-          </button>
-        </div>
-        <div class="modal-body about-body">
-          <div class="about-logo"><Feather :size="40" /></div>
-          <div class="about-name">InkStone MD</div>
-          <div class="about-version">版本 {{ appVersion }}</div>
-          <p class="about-desc">轻量、优雅的桌面 Markdown 编辑器</p>
-          <p class="about-meta">技术栈: Tauri 2 + Vue 3</p>
-          <p class="about-meta">许可证: GPL-3.0</p>
-        </div>
-      </div>
-    </div>
+    <AboutModal v-model="showAboutModal" :version="appVersion" />
   </div>
 </template>
 
 <style scoped>
 /* 自定义滚动条样式 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
-}
-
-/* 深色模式滚动条 */
-.dark ::-webkit-scrollbar-track {
-  background: #1f2937;
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: #4b5563;
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: #6b7280;
-}
-
-/* KaTeX 块级公式样式 */
-.katex-display {
-  display: block;
-  text-align: center;
-  margin: 1em 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.katex-error {
-  color: #dc2626;
-  background: #fee2e2;
-  padding: 0.5em;
-  border-radius: 4px;
-  font-family: monospace;
-}
-
-.dark .katex-error {
-  background: #7f1d1d;
-  color: #fecaca;
-}
-
-.toolbar {
-  min-height: 40px;
-  user-select: none;
-  -webkit-app-region: no-drag;
-}
-
-.toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px;
-  height: 30px;
-  border-radius: 6px;
-  background: transparent;
-  transition: background 150ms ease;
-}
-.toolbar-group + .toolbar-group {
-  margin-left: 2px;
-  border-left: 1px solid rgba(0, 0, 0, 0.06);
-  padding-left: 8px;
-  margin-left: 4px;
-}
-.dark .toolbar-group + .toolbar-group {
-  border-left-color: rgba(255, 255, 255, 0.08);
-}
-
-.toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 28px;
-  min-width: 28px;
-  padding: 0 6px;
-  border-radius: 5px;
-  background: transparent;
-  border: none;
-  color: #4b5563;
-  cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease, transform 100ms ease;
-  -webkit-user-select: none;
-  user-select: none;
-  font-size: 13px;
-  line-height: 1;
-}
-.toolbar-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #111827;
-}
-.toolbar-btn:active {
-  transform: scale(0.96);
-}
-.toolbar-btn:focus-visible {
-  outline: 2px solid rgba(59, 130, 246, 0.5);
-  outline-offset: 1px;
-}
-.toolbar-btn.active {
-  background: rgba(59, 130, 246, 0.12);
-  color: #2563eb;
-}
-.dark .toolbar-btn {
-  color: #9ca3af;
-}
-.dark .toolbar-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #f3f4f6;
-}
-.dark .toolbar-btn.active {
-  background: rgba(96, 165, 250, 0.18);
-  color: #93c5fd;
-}
-
-.toolbar-label {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.toolbar-select {
-  height: 28px;
-  padding: 0 6px;
-  border-radius: 5px;
-  background: transparent;
-  border: 1px solid transparent;
-  color: #4b5563;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background-color 150ms ease, border-color 150ms ease;
-  outline: none;
-}
-.toolbar-select:hover {
-  background: rgba(0, 0, 0, 0.06);
-  border-color: rgba(0, 0, 0, 0.08);
-}
-.dark .toolbar-select {
-  color: #9ca3af;
-}
-.dark .toolbar-select:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.1);
-}
-
-.theme-toggle-icon {
-  transition: transform 200ms ease;
-}
-.toolbar-btn:hover .theme-toggle-icon {
-  transform: rotate(20deg);
-}
-
-.overflow-menu {
-  animation: overflow-fade-in 120ms ease-out;
-}
-@keyframes overflow-fade-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.overflow-menu-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: #9ca3af;
-  padding: 6px 12px 4px;
-}
-.overflow-menu-divider {
-  height: 1px;
-  background: rgba(0, 0, 0, 0.06);
-  margin: 4px 0;
-}
-.dark .overflow-menu-divider {
-  background: rgba(255, 255, 255, 0.08);
-}
-.overflow-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 12px;
-  background: transparent;
-  border: none;
-  color: #374151;
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 100ms ease;
-}
-.overflow-menu-item:hover {
-  background: rgba(0, 0, 0, 0.05);
-}
-.dark .overflow-menu-item {
-  color: #d1d5db;
-}
-.dark .overflow-menu-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-/* 打印:隐藏工具栏/Tab/侧边栏/状态栏,只打印预览内容 */
-@media print {
-  body { background: white !important; color: black !important; }
-  .toolbar,
-  .tab-bar,
-  .sidebar,
-  .search-panel,
-  .empty-state,
-  .toolbar-tabs,
-  .tab-icon-btn,
-  .tab-item,
-  .overflow-menu,
-  .print-hint {
-    display: none !important;
-  }
-  .preview-area,
-  .editor-area {
-    border: none !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    max-width: 100% !important;
-  }
-  .markdown-body { max-width: 100% !important; }
-  .ink-image-toolbar,
-  .ink-codeblock-toolbar,
-  .ink-table-toolbar {
-    display: none !important;
-  }
-  * {
-    -webkit-print-color-adjust: exact !important;
-    print-color-adjust: exact !important;
-  }
-  h1, h2, h3, h4, h5, h6 {
-    page-break-after: avoid;
-    break-after: avoid;
-  }
-  pre, blockquote, table, img, figure {
-    page-break-inside: avoid;
-    break-inside: avoid;
-  }
-  p, li { orphans: 3; widows: 3; }
-  a { color: inherit !important; text-decoration: none !important; }
-  a[href]::after { content: "" !important; }
-}
-
-/* 打印提示横幅 */
-.print-hint {
-  position: fixed;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  max-width: 480px;
-  padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-  color: #374151;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.print-hint-icon {
-  color: #2563eb;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.print-hint-body strong {
-  color: #111827;
-  display: block;
-  margin-bottom: 2px;
-}
-.print-hint-close {
-  background: transparent;
-  border: none;
-  color: #9ca3af;
-  cursor: pointer;
-  padding: 2px;
-  border-radius: 4px;
-  transition: background-color 100ms ease, color 100ms ease;
-}
-.print-hint-close:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #374151;
-}
-.dark .print-hint {
-  background: #1f2937;
-  border-color: #374151;
-  color: #d1d5db;
-}
-.dark .print-hint-body strong { color: #f3f4f6; }
-.dark .print-hint-close { color: #6b7280; }
-.dark .print-hint-close:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #d1d5db;
-}
-@keyframes print-hint-in {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-.print-hint { animation: print-hint-in 200ms ease-out; }
-
-/* Tab 栏 */
-.tab-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  background: transparent;
-  border: none;
-  color: #6b7280;
-  cursor: pointer;
-  transition: background-color 150ms ease, color 150ms ease;
-  flex-shrink: 0;
-}
-.tab-icon-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #111827;
-}
-.tab-icon-btn.active {
-  background: rgba(0, 0, 0, 0.08);
-  color: #2563eb;
-}
-.dark .tab-icon-btn {
-  color: #9ca3af;
-}
-.dark .tab-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #f3f4f6;
-}
-.dark .tab-icon-btn.active {
-  background: rgba(255, 255, 255, 0.1);
-  color: #93c5fd;
-}
-
-.tab-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px 0 12px;
-  border-radius: 5px;
-  font-size: 13px;
-  cursor: pointer;
-  color: #4b5563;
-  background: transparent;
-  border-bottom: 2px solid transparent;
-  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
-  flex-shrink: 0;
-  position: relative;
-  user-select: none;
-}
-.tab-item:hover {
-  background: rgba(0, 0, 0, 0.05);
-  color: #111827;
-}
-.tab-item.active {
-  background: #ffffff;
-  color: #111827;
-  border-bottom-color: #2563eb;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
-.tab-item:hover .tab-close {
-  opacity: 1;
-}
-.dark .tab-item {
-  color: #9ca3af;
-}
-.dark .tab-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #f3f4f6;
-}
-.dark .tab-item.active {
-  background: #1f2937;
-  color: #f3f4f6;
-  border-bottom-color: #60a5fa;
-}
-
-.tab-unsaved {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #f59e0b;
-  flex-shrink: 0;
-}
-
-.tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 150ms ease, background-color 100ms ease, color 100ms ease;
-}
-.tab-close:hover {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-}
-.tab-item.active .tab-close {
-  opacity: 0.6;
-}
-
-/* 全局过渡:暗色/主题切换时不抖 */
-.toolbar,
-.overflow-menu,
-.tab-item,
-.toolbar-btn,
-.toolbar-select,
-.tab-icon-btn,
-.editor-area {
-  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
-}
-
-/* 自定义滚动条 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -3943,498 +3007,25 @@ onUnmounted(() => {
   background: transparent;
 }
 
-/* Mermaid diagram styles */
-.mermaid-diagram {
-  margin: 1rem 0;
+/* KaTeX 块级公式样式 */
+.katex-display {
+  display: block;
   text-align: center;
+  margin: 1em 0;
   overflow-x: auto;
+  overflow-y: hidden;
 }
-.mermaid-diagram svg {
-  max-width: 100%;
-  height: auto;
-}
-.mermaid-error {
-  background: #fee;
-  padding: 1rem;
+
+.katex-error {
+  color: #dc2626;
+  background: #fee2e2;
+  padding: 0.5em;
   border-radius: 4px;
   font-family: monospace;
-  font-size: 12px;
-  overflow-x: auto;
-}
-.dark .mermaid-error {
-  background: #422;
 }
 
-/* 编辑器区域样式 */
-.editor-area {
-  background: #fff;
-  border: 1px solid #e5e5e5;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-.dark .editor-area {
-  background: #1f2937;
-  border-color: #374151;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-/* textarea 聚焦高亮 */
-.editor-input {
-  border: none;
-  outline: none;
-  transition: box-shadow 0.2s ease;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-.editor-input:focus {
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
-}
-.dark .editor-input {
-  background: #1f2937;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-.dark .editor-input:focus {
-  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5);
-}
-
-/* 预览区域边框 */
-.preview-area {
-  border-left: 1px solid #e5e5e5;
-}
-.dark .preview-area {
-  border-color: #374151;
-}
-
-/* 图片交互(v-html 注入的子节点,需用 :deep 穿透) */
-:deep(.ink-image-wrap) {
-  position: relative;
-  display: block;
-  margin: 0.5em 0;
-}
-:deep(.ink-image-wrap:hover) :deep(.ink-image-toolbar) {
-  opacity: 1;
-  pointer-events: auto;
-}
-:deep(.ink-image-toolbar) {
-  position: absolute;
-  top: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 4px;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-  font-size: 12px;
-  z-index: 5;
-  user-select: none;
-}
-.dark :deep(.ink-image-toolbar) {
-  background: rgba(31, 41, 55, 0.95);
-  border-color: #4b5563;
-  color: #e5e7eb;
-}
-:deep(.ink-image-toolbar button) {
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: inherit;
-}
-:deep(.ink-image-toolbar button:hover) {
-  background: rgba(59, 130, 246, 0.15);
-}
-:deep(.ink-image-scale) {
-  padding: 0 4px;
-  min-width: 38px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: #6b7280;
-}
-.dark :deep(.ink-image-scale) {
-  color: #9ca3af;
-}
-:deep(.ink-image-sep) {
-  width: 1px;
-  height: 14px;
-  background: #d1d5db;
-  margin: 0 2px;
-}
-.dark :deep(.ink-image-sep) {
-  background: #4b5563;
-}
-
-/* 目录([[toc]]) */
-:deep(.ink-toc) {
-  display: block;
-  padding: 0.75em 1em;
-  margin: 1em 0;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f9fafb;
-  font-size: 0.95em;
-}
-.dark :deep(.ink-toc) {
-  border-color: #374151;
-  background: #1f2937;
-}
-:deep(.ink-toc-title) {
-  font-weight: 600;
-  margin-bottom: 0.5em;
-  color: #6b7280;
-  font-size: 0.85em;
-  letter-spacing: 0.05em;
-}
-:deep(.ink-toc ul) {
-  list-style: none;
-  padding-left: 0;
-  margin: 0;
-}
-:deep(.ink-toc ul ul) {
-  padding-left: 1.2em;
-  margin: 0.2em 0;
-}
-:deep(.ink-toc li) {
-  margin: 0.2em 0;
-}
-:deep(.ink-toc a) {
-  color: #2563eb;
-  text-decoration: none;
-  border-bottom: 1px dashed transparent;
-}
-:deep(.ink-toc a:hover) {
-  border-bottom-color: #2563eb;
-}
-.dark :deep(.ink-toc a) {
-  color: #93c5fd;
-}
-.dark :deep(.ink-toc a:hover) {
-  border-bottom-color: #93c5fd;
-}
-:deep(.ink-toc-empty) {
-  color: #9ca3af;
-  font-style: italic;
-}
-
-/* 代码块工具栏 */
-:deep(.ink-codeblock) {
-  position: relative;
-  margin: 1em 0;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid #e5e7eb;
-}
-.dark :deep(.ink-codeblock) {
-  border-color: #374151;
-}
-:deep(.ink-codeblock-toolbar) {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 10px;
-  background: #f3f4f6;
-  border-bottom: 1px solid #e5e7eb;
-  font-size: 12px;
-  user-select: none;
-}
-.dark :deep(.ink-codeblock-toolbar) {
-  background: #1f2937;
-  border-bottom-color: #374151;
-}
-:deep(.ink-codeblock-lang) {
-  color: #6b7280;
-  text-transform: lowercase;
-  font-family: ui-monospace, monospace;
-}
-.dark :deep(.ink-codeblock-lang) {
-  color: #9ca3af;
-}
-:deep(.ink-codeblock-copy) {
-  border: 1px solid #d1d5db;
-  background: #fff;
-  color: #374151;
-  border-radius: 4px;
-  padding: 2px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-:deep(.ink-codeblock-copy:hover) {
-  background: #f3f4f6;
-  border-color: #9ca3af;
-}
-:deep(.ink-codeblock-copy.copied) {
-  background: #10b981;
-  color: #fff;
-  border-color: #10b981;
-}
-.dark :deep(.ink-codeblock-copy) {
-  background: #374151;
-  color: #e5e7eb;
-  border-color: #4b5563;
-}
-.dark :deep(.ink-codeblock-copy:hover) {
-  background: #4b5563;
-  border-color: #6b7280;
-}
-:deep(.ink-codeblock-body) {
-  display: block;
-}
-:deep(.ink-codeblock pre) {
-  margin: 0;
-  border-radius: 0;
-  border: none;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  padding: 0;
-  line-height: 1.5;
-  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-  font-size: 0.9em;
-}
-:deep(.ink-codeblock pre code) {
-  display: block;
-  flex: 1 1 auto;
-  padding: 1em 1em 1em 0.6em;
-  margin: 0;
-  background: transparent;
-  white-space: pre;
-  overflow-x: auto;
-}
-:deep(.ink-codeblock .line) {
-  display: block;
-  min-height: 1.5em;
-}
-:deep(.ink-codeblock .ink-line-nums) {
-  list-style: none;
-  margin: 0;
-  padding: 1em 0.5em 1em 1em;
-  text-align: right;
-  color: #9ca3af;
-  user-select: none;
-  background: rgba(0, 0, 0, 0.04);
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.5;
-  flex: 0 0 auto;
-}
-.dark :deep(.ink-codeblock .ink-line-nums) {
-  background: rgba(255, 255, 255, 0.04);
-  border-right-color: rgba(255, 255, 255, 0.06);
-  color: #6b7280;
-}
-:deep(.ink-codeblock .ink-line-nums li) {
-  font-size: 0.85em;
-}
-
-/* 表格工具栏 */
-:deep(.ink-table) {
-  position: relative;
-  margin: 1em 0;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid #e5e7eb;
-}
-.dark :deep(.ink-table) {
-  border-color: #374151;
-}
-:deep(.ink-table-toolbar) {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: #f9fafb;
-  border-bottom: 1px solid #e5e7eb;
-  font-size: 12px;
-  user-select: none;
-  flex-wrap: wrap;
-}
-.dark :deep(.ink-table-toolbar) {
-  background: #1f2937;
-  border-bottom-color: #374151;
-}
-:deep(.ink-table-toolbar button) {
-  border: 1px solid #d1d5db;
-  background: #fff;
-  color: #374151;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-:deep(.ink-table-toolbar button:hover) {
-  background: #f3f4f6;
-  border-color: #9ca3af;
-}
-:deep(.ink-table-toolbar button.copied) {
-  background: #10b981;
-  color: #fff;
-  border-color: #10b981;
-}
-.dark :deep(.ink-table-toolbar button) {
-  background: #374151;
-  color: #e5e7eb;
-  border-color: #4b5563;
-}
-.dark :deep(.ink-table-toolbar button:hover) {
-  background: #4b5563;
-  border-color: #6b7280;
-}
-:deep(.ink-table table) {
-  margin: 0;
-  border: none;
-  border-radius: 0;
-}
-:deep(.ink-table[data-edit="true"]) :deep(th),
-:deep(.ink-table[data-edit="true"]) :deep(td) {
-  outline: 1px dashed #93c5fd;
-  outline-offset: -1px;
-  background: rgba(59, 130, 246, 0.04);
-  cursor: text;
-}
-:deep(.ink-table[data-edit="true"]) :deep(th:focus),
-:deep(.ink-table[data-edit="true"]) :deep(td:focus) {
-  outline: 2px solid #3b82f6;
-  background: rgba(59, 130, 246, 0.08);
-}
-
-/* 通用对话框样式 */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-}
-.modal-card {
-  background: #fff;
-  color: #1f2937;
-  border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
-  width: 520px;
-  max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 64px);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-.dark .modal-card {
-  background: #1f2937;
-  color: #e5e7eb;
-}
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e5e7eb;
-}
-.dark .modal-header {
-  border-color: #374151;
-}
-.modal-header h3 {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0;
-}
-.modal-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  border-radius: 6px;
-}
-.modal-close:hover {
-  background: rgba(127, 127, 127, 0.15);
-}
-.modal-body {
-  padding: 16px;
-  overflow-y: auto;
-}
-
-/* 快捷键表格 */
-.shortcuts-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.shortcuts-table th,
-.shortcuts-table td {
-  text-align: left;
-  padding: 7px 10px;
-  border-bottom: 1px solid #e5e7eb;
-}
-.dark .shortcuts-table th,
-.dark .shortcuts-table td {
-  border-color: #374151;
-}
-.shortcuts-table th {
-  font-weight: 600;
-  color: #6b7280;
-}
-.dark .shortcuts-table th {
-  color: #9ca3af;
-}
-.shortcuts-table code {
-  background: rgba(127, 127, 127, 0.12);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-/* 关于对话框 */
-.about-card {
-  width: 380px;
-}
-.about-body {
-  text-align: center;
-  padding: 28px 20px;
-}
-.about-logo {
-  color: #3b82f6;
-  margin-bottom: 10px;
-}
-.dark .about-logo {
-  color: #60a5fa;
-}
-.about-name {
-  font-size: 20px;
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-.about-version {
-  font-size: 13px;
-  color: #6b7280;
-  margin-bottom: 14px;
-}
-.dark .about-version {
-  color: #9ca3af;
-}
-.about-desc {
-  font-size: 13px;
-  margin: 6px 0;
-}
-.about-meta {
-  font-size: 12px;
-  color: #6b7280;
-  margin: 4px 0;
-}
-.dark .about-meta {
-  color: #9ca3af;
+.dark .katex-error {
+  background: #7f1d1d;
+  color: #fecaca;
 }
 </style>
