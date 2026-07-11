@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> InkStone MD 是一个 Tauri 2.x + Vue 3 桌面 Markdown 编辑器,目前主版本 1.0.0。所有编辑/预览/资源管理/主题逻辑集中在 `src/App.vue` 一个文件里(约 3500 行),没有拆分组件目录。
+> InkStone MD 是一个 Tauri 2.x + Vue 3 桌面 Markdown 编辑器,目前主版本 1.5.0。视图层已拆分为 `src/components/` 下多个 SFC 组件(工具栏/Tab/编辑器/文件树/对话框等),文件树逻辑抽到 `src/composables/useWorkspace.ts`;编辑器、Markdown 渲染、导出等核心仍保留在 `src/App.vue`(约 2700 行)。
 
 ## 命令速查
 
@@ -26,7 +26,7 @@ npm run preview          # 预览 dist/
 
 ### Rust 端(`src-tauri/src/lib.rs`)
 
-`pub fn run()` 是入口,由 `main.rs` 调用。已注册的 `#[tauri::command]` 共 13 个:
+`pub fn run()` 是入口,由 `main.rs` 调用。已注册的 `#[tauri::command]` 共 16 个:
 
 | 命令 | 用途 |
 |---|---|
@@ -35,7 +35,10 @@ npm run preview          # 预览 dist/
 | `get_file_info` | 元信息(name + size) |
 | `read_directory` | 递归扫目录(忽略 `.` 开头) |
 | `create_file` / `create_directory` / `rename_path` / `delete_path` | 文件树 CRUD |
-| `reveal_in_folder` | 资源管理器中定位(Win/macOS/Linux 三分支) |
+| `move_path` | 移动文件/文件夹到目标目录(跨盘符 copy+delete 回退) |
+| `reveal_in_folder` | 资源管理器中定位/打开(目录直接打开内容,文件定位选中) |
+| `ensure_library` | 初始化/获取应用内库根目录(app data 默认,可迁移) |
+| `migrate_library` | 迁移库根到新目录(搬移文档 + 更新 store) |
 | `compress_image` | JPEG/PNG 重编码,走 `image` crate |
 | `frontend_ready` | 前端握手,见下文 |
 
@@ -45,6 +48,7 @@ npm run preview          # 预览 dist/
 - `tauri-plugin-single-instance`:必须在所有插件**最前面**注册,负责"第二次双击 .md 时把窗口前置并下发文件"
 - `tauri-plugin-dialog` / `tauri-plugin-fs`:文件选择 + 文件系统
 - `tauri-plugin-deep-link`:`schemes: ["inkstone"]` 已在 `tauri.conf.json` 注册,本期未启用协议跳转
+- `tauri-plugin-store`:配置持久化(库路径 `libraryPath` / 最近外部文件夹 `recentFolders`),前端 `@tauri-apps/plugin-store` 的 `LazyStore("settings.json")` + Rust `app.store("settings.json")`;注册须在 `single-instance` **之后**
 - `tauri` crate 必须开 `features = ["devtools", "protocol-asset"]`,后者是本地图片走 `convertFileSrc` 转换 `asset://` 协议的前提
 
 ### 前后端握手(双击 .md 打开)
@@ -84,7 +88,7 @@ Uncaught ReferenceError: Cannot access 'X' before initialization
 
 - 安装器 `installMode: "perMachine"` 需要管理员权限,但这是双击 .md 文件关联能稳定生效的前提(Win 10 HKCU 关联优先级有坑)
 - 路径混用:`std::path::Path` 拿到的是 `\`,但 Tauri 内部要 `/`,传 `convertFileSrc` / 写 `asset://` 之前记得 `.replace(/\\/g, '/')`
-- `reveal_in_folder` 用 `explorer /select,<path>`,**不要**手工加引号 — Rust 的 `Command::arg` 会自动处理含空格的路径
+- `reveal_in_folder`:目录直接 `explorer <dir>` 打开内容,文件用 `explorer /select,<path>` 定位;**不要**手工加引号 — Rust 的 `Command::arg` 会自动处理含空格的路径
 - `vue-tsc` 报 `:deep` 警告(`lightningcss minify 'deep' is not a valid pseudo-class`)是 Vue scoped CSS 已知噪音,不影响构建
 
 ## 发布参考

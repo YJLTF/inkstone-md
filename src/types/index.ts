@@ -4,6 +4,7 @@ export interface FileEntry {
   is_dir: boolean;
   is_open: boolean;
   children?: FileEntry[];
+  parent?: string;
 }
 
 export interface Tab {
@@ -38,6 +39,7 @@ export interface ContextMenuState {
   y: number;
   target: FileEntry | null;
   parentPath: string | null;
+  rootKind: TreeRootKind | null;
 }
 
 export interface RenamingState {
@@ -56,3 +58,20 @@ export interface DocumentAsset {
 }
 
 export type ImageAlign = 'left' | 'center' | 'right';
+
+export type TreeRootKind = 'library' | 'external';
+
+export interface TreeRoot {
+  kind: TreeRootKind;
+  path: string;
+  label: string;
+  entries: FileEntry[];
+  loading?: boolean;
+  invalid?: boolean;
+  is_open?: boolean;
+}
+
+export interface AppConfig {
+  libraryPath: string;
+  recentFolders: string[];
+}

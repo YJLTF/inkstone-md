@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick, h } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
 import MarkdownIt from "markdown-it";
 import mk from "markdown-it-task-lists";
 import footnote from "markdown-it-footnote";
@@ -16,7 +16,7 @@ import hljsLightCss from "highlight.js/styles/github.css?raw";
 import hljsDarkCss from "highlight.js/styles/github-dark.css?raw";
 import mermaidJs from "mermaid/dist/mermaid.min.js?raw";
 
-import type { FileEntry, Tab, Heading, ThemeName, ViewMode, ContextMenuState, RenamingState, DocumentAsset, ImageAlign, SidebarMode, ThemeOption } from './types';
+import type { Tab, Heading, ThemeName, ViewMode, DocumentAsset, ImageAlign, SidebarMode, ThemeOption } from './types';
 import { isAbsolutePath, posixNormalize, slugify, escapeHtml, formatBytes, getFileName, getMimeFromExt, bytesToBase64, fetchAsDataUri } from './utils';
 import ShortcutsModal from './components/ShortcutsModal.vue';
 import AboutModal from './components/AboutModal.vue';
@@ -26,6 +26,8 @@ import SearchPanel from './components/SearchPanel.vue';
 import TheTabBar from './components/TheTabBar.vue';
 import TheToolbar from './components/TheToolbar.vue';
 import EditorPane from './components/EditorPane.vue';
+import TheFileTree from './components/TheFileTree.vue';
+import { useWorkspace, workspaceKey } from './composables/useWorkspace';
 import { EXPORT_BASE_CSS, PRINT_CSS } from './constants/exportCss';
 
 const md = new MarkdownIt({
@@ -44,7 +46,7 @@ const md = new MarkdownIt({
         return wrap(hljs.highlight(str, { language: lang }).value);
       } catch {}
     }
-    return wrap(str);
+    return wrap(escapeHtml(str));
   },
 });
 md.use(mk, { enabled: true, label: true });
@@ -145,26 +147,15 @@ const scrollSync = ref(localStorage.getItem('scrollSync') !== 'false');
 let syncingFrom: 'editor' | 'preview' | null = null;
 const activeHeadingIndex = ref(-1);
 
-const workspacePath = ref<string | null>(null);
-const fileTree = ref<FileEntry[]>([]);
+// 工作区(双区文件树:应用内库 + 外部文件夹),逻辑全部在 useWorkspace composable
+const ws = useWorkspace({
+  tabs,
+  openFile: (p: string) => openFile(p),
+  closeTab,
+});
+provide(workspaceKey, ws);
+
 const autoSaveInterval = ref<number | null>(null);
-
-// 右键菜单状态
-const contextMenu = ref<ContextMenuState>({
-  visible: false,
-  x: 0,
-  y: 0,
-  target: null,
-  parentPath: null,
-});
-
-// 重命名状态
-const renaming = ref<RenamingState>({
-  active: false,
-  path: '',
-  originalName: '',
-  input: '',
-});
 
 // 最近文件功能
 const MAX_RECENT_FILES = 10;
@@ -330,7 +321,7 @@ async function renameAsset(asset: DocumentAsset) {
   try {
     await invoke("rename_path", { oldPath: asset.resolved, newPath });
     replaceAssetRefInContent(asset.raw, newName);
-    if (workspacePath.value) await loadFileTree();
+    await ws.reloadPath(asset.resolved);
     await refreshAssetExists();
   } catch (err) {
     alert("重命名失败: " + err);
@@ -359,7 +350,8 @@ async function moveAsset(asset: DocumentAsset) {
       }
     }
     replaceAssetRefInContent(asset.raw, newRaw);
-    if (workspacePath.value) await loadFileTree();
+    await ws.reloadPath(asset.resolved);
+    await ws.reloadPath(targetDir);
     await refreshAssetExists();
   } catch (err) {
     alert("移动失败: " + err);
@@ -442,7 +434,7 @@ async function compressAsset(asset: DocumentAsset) {
       if (fileDir !== dir) newRaw = finalPath;
     }
     replaceAssetRefInContent(asset.raw, newRaw);
-    if (workspacePath.value) await loadFileTree();
+    await ws.reloadPath(asset.resolved);
     await refreshAssetExists();
   } catch (err) {
     alert("压缩失败: " + err);
@@ -481,70 +473,6 @@ const replaceQuery = ref("");
 const searchMatches = ref<{ index: number; length: number }[]>([]);
 const currentMatchIndex = ref(-1);
 
-// 简单的文件树渲染函数
-function renderFileTree(entries: FileEntry[], depth: number = 0): any[] {
-  return entries.map(entry => {
-    const paddingLeft = depth * 16 + 8;
-    const children = entry.is_dir && entry.is_open && entry.children
-      ? renderFileTree(entry.children, depth + 1)
-      : [];
-
-    // 获取文件所在的目录路径，使用正斜杠
-    const normalizedPath = entry.path.replace(/\\/g, '/');
-    const entryDirPath = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'));
-
-    // 检查是否是当前重命名的目标
-    const isRenamingTarget = renaming.value.active && renaming.value.path === entry.path;
-
-    return h('div', { key: entry.path }, [
-      h('div', {
-        class: 'flex items-center gap-1 px-2 py-1 rounded cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700 text-sm',
-        style: { paddingLeft: paddingLeft + 'px' },
-        onClick: () => {
-          if (isRenamingTarget) return;
-          if (entry.is_dir) {
-            entry.is_open = !entry.is_open;
-          } else {
-            openFile(entry.path);
-          }
-        },
-        onContextmenu: (e: MouseEvent) => {
-          showContextMenu(e, entry, entryDirPath);
-        }
-      }, [
-        h('span', {}, entry.is_dir ? (entry.is_open ? '📂' : '📁') : '📄'),
-        isRenamingTarget
-          ? h('input', {
-            class: 'rename-input px-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200',
-            style: 'width: auto; flex: 1;',
-            value: renaming.value.input,
-            onInput: (e: Event) => {
-              renaming.value.input = (e.target as HTMLInputElement).value;
-            },
-            onKeydown: (e: KeyboardEvent) => {
-              if (e.key === 'Enter') {
-                confirmRename();
-              } else if (e.key === 'Escape') {
-                cancelRename();
-              }
-            },
-            onClick: (e: Event) => {
-              e.stopPropagation();
-            },
-            onBlur: () => {
-              // 失去焦点时自动确认重命名
-              if (renaming.value.active) {
-                confirmRename();
-              }
-            }
-          })
-          : h('span', { class: 'truncate' }, entry.name)
-      ]),
-      ...children
-    ]);
-  });
-}
-
 // 选中文本统计
 const selectedCount = ref(0);
 
@@ -579,14 +507,33 @@ function toTauriAssetUrl(src: string, currentFilePath: string | null): string {
  *   - 相对路径: 相对当前 tab 文件所在目录,convertFileSrc
  *   - 文件未保存: 保留原 src(后续保存后再打开会失效,但不破坏编辑)
  */
+/**
+ * 对 markdown 源串中"代码块之外"的部分应用 fn,跳过 fenced(```/~~~)与行内(`)代码,
+ * 避免 toc/图片等预处理改写到代码块内部。代码块原样保留。
+ */
+function mapOutsideCode(content: string, fn: (s: string) => string): string {
+  const store: string[] = [];
+  const stash = (m: string) => {
+    const i = store.length;
+    store.push(m);
+    return `\u0000K${i}\u0000`;
+  };
+  let s = content.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, stash);
+  s = s.replace(/`[^`\n]*`/g, stash);
+  s = fn(s);
+  return s.replace(/\u0000K(\d+)\u0000/g, (_, i) => store[+i]);
+}
+
 function preprocessImageSrcs(content: string, currentFilePath: string | null): string {
-  return content.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
-    (m, alt: string, src: string, _title?: string) => {
-      const newSrc = toTauriAssetUrl(src, currentFilePath);
-      if (newSrc === src) return m;
-      return `![${alt}](${newSrc})`;
-    },
+  return mapOutsideCode(content, (s) =>
+    s.replace(
+      /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+      (m, alt: string, src: string, _title?: string) => {
+        const newSrc = toTauriAssetUrl(src, currentFilePath);
+        if (newSrc === src) return m;
+        return `![${alt}](${newSrc})`;
+      },
+    ),
   );
 }
 
@@ -597,33 +544,34 @@ function preprocessImageSrcs(content: string, currentFilePath: string | null): s
  */
 function preprocessToc(content: string, heads: Heading[]): string {
   if (!content.includes('[[toc]]')) return content;
+  let repl: string;
   if (heads.length === 0) {
-    return content.replace(/\[\[toc\]\]/g, '<p class="ink-toc-empty">暂无标题</p>');
-  }
-  const buildList = (idx: number, minLevel: number): { html: string; next: number } => {
-    let out = '<ul>';
-    while (idx < heads.length) {
-      const h = heads[idx];
-      if (h.level < minLevel) break;
-      if (h.level > minLevel) {
-        const sub = buildList(idx, h.level);
-        out += `<li>${sub.html}`;
-        idx = sub.next;
-        out += '</li>';
-        continue;
+    repl = '<p class="ink-toc-empty">暂无标题</p>';
+  } else {
+    const buildList = (idx: number, minLevel: number): { html: string; next: number } => {
+      let out = '<ul>';
+      while (idx < heads.length) {
+        const h = heads[idx];
+        if (h.level < minLevel) break;
+        if (h.level > minLevel) {
+          const sub = buildList(idx, h.level);
+          out += `<li>${sub.html}`;
+          idx = sub.next;
+          out += '</li>';
+          continue;
+        }
+        const anchor = slugify(h.text);
+        out += `<li><a href="#${anchor}">${escapeHtml(h.text)}</a></li>`;
+        idx++;
       }
-      const anchor = slugify(h.text);
-      out += `<li><a href="#${anchor}">${escapeHtml(h.text)}</a></li>`;
-      idx++;
-    }
-    out += '</ul>';
-    return { html: out, next: idx };
-  };
-  const { html } = buildList(0, heads[0].level);
-  return content.replace(
-    /\[\[toc\]\]/g,
-    `<nav class="ink-toc"><div class="ink-toc-title">目录</div>${html}</nav>`,
-  );
+      out += '</ul>';
+      return { html: out, next: idx };
+    };
+    const { html } = buildList(0, heads[0].level);
+    repl = `<nav class="ink-toc"><div class="ink-toc-title">目录</div>${html}</nav>`;
+  }
+  // 仅替换代码块之外的 [[toc]],代码块内的原样保留
+  return mapOutsideCode(content, (s) => s.replace(/\[\[toc\]\]/g, repl));
 }
 
 
@@ -1037,6 +985,23 @@ const renderedHTML = computed(() => {
 
   html = addHeadingIds(html, headings.value);
 
+  // Replace mermaid code blocks with placeholder divs (需读取 <code> 内容,故在代码块保护之前)
+  html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
+    const id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
+    const decoded = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
+    return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}"></div>`;
+  });
+
+  // 暂存所有代码块(<pre> 含块级、<code> 含行内),避免后续 $...$ 公式正则穿透到代码内部
+  const codeStore: string[] = [];
+  const stash = (m: string) => {
+    const i = codeStore.length;
+    codeStore.push(m);
+    return `\u0000C${i}\u0000`;
+  };
+  html = html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/g, stash);
+  html = html.replace(/<code\b[^>]*>[\s\S]*?<\/code>/g, stash);
+
   // 先处理块级公式（多行 $...$）
   html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
     try {
@@ -1056,12 +1021,8 @@ const renderedHTML = computed(() => {
     }
   });
 
-  // Replace mermaid code blocks with placeholder divs
-  html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
-    const id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
-    const decoded = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
-    return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}"></div>`;
-  });
+  // 还原代码块
+  html = html.replace(/\u0000C(\d+)\u0000/g, (_, i) => codeStore[+i]);
 
   // 包装 <img> 为可交互元素
   html = wrapImagesForInteraction(html);
@@ -1436,218 +1397,11 @@ async function openFile(filePath?: string) {
 }
 
 async function openFolder() {
-  try {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-    });
-    if (selected) {
-      workspacePath.value = selected as string;
-      showSidebar.value = true;
-      await loadFileTree();
-    }
-  } catch (err) {
-    console.error("打开文件夹失败:", err);
+  const path = await ws.openExternalFolder();
+  if (path) {
+    showSidebar.value = true;
+    sidebarMode.value = "tree";
   }
-}
-
-async function loadFileTree() {
-  if (!workspacePath.value) return;
-  try {
-    fileTree.value = await invoke<FileEntry[]>("read_directory", { path: workspacePath.value });
-  } catch (err) {
-    console.error("读取目录失败:", err);
-  }
-}
-
-// 右键菜单处理
-function showContextMenu(event: MouseEvent, entry: FileEntry | null, parentPath: string) {
-  event.preventDefault();
-  event.stopPropagation();
-
-  // 计算菜单位置，防止超出屏幕边界
-  const menuWidth = 150; // 估计菜单宽度
-  const menuHeight = 150; // 估计菜单高度
-  const windowWidth = window.innerWidth;
-  const windowHeight = window.innerHeight;
-
-  let x = event.clientX;
-  let y = event.clientY;
-
-  // 如果右侧空间不足，向左显示
-  if (x + menuWidth > windowWidth) {
-    x = windowWidth - menuWidth - 10;
-  }
-
-  // 如果下方空间不足，向上显示
-  if (y + menuHeight > windowHeight) {
-    y = windowHeight - menuHeight - 10;
-  }
-
-  contextMenu.value = {
-    visible: true,
-    x: Math.max(10, x),
-    y: Math.max(10, y),
-    target: entry,
-    parentPath: parentPath,
-  };
-}
-
-function showContextMenuOnTree(event: MouseEvent) {
-  event.preventDefault();
-  event.stopPropagation(); // 阻止事件冒泡
-  if (workspacePath.value) {
-    showContextMenu(event, null, workspacePath.value);
-  }
-}
-
-function hideContextMenu() {
-  contextMenu.value.visible = false;
-  contextMenu.value.target = null;
-  contextMenu.value.parentPath = null;
-}
-
-async function handleNewFile() {
-  if (!contextMenu.value.parentPath) return;
-  const name = prompt("请输入文件名:", "新建文件.md");
-  if (!name) return;
-
-  // 验证文件名
-  if (name.includes('/') || name.includes('\\') || name.includes(':') ||
-      name.includes('*') || name.includes('?') || name.includes('"') ||
-      name.includes('<') || name.includes('>') || name.includes('|')) {
-    alert("文件名包含非法字符，请使用有效的文件名");
-    return;
-  }
-
-  // 使用正确的路径分隔符
-  const basePath = contextMenu.value.parentPath.replace(/\\/g, '/');
-  const filePath = basePath + '/' + name;
-  try {
-    await invoke("create_file", { path: filePath });
-    await loadFileTree();
-  } catch (err) {
-    alert("创建文件失败: " + err);
-  }
-  hideContextMenu();
-}
-
-async function handleNewFolder() {
-  if (!contextMenu.value.parentPath) return;
-  const name = prompt("请输入文件夹名:", "新建文件夹");
-  if (!name) return;
-
-  // 验证文件夹名
-  if (name.includes('/') || name.includes('\\') || name.includes(':') ||
-      name.includes('*') || name.includes('?') || name.includes('"') ||
-      name.includes('<') || name.includes('>') || name.includes('|')) {
-    alert("文件夹名包含非法字符，请使用有效的文件夹名");
-    return;
-  }
-
-  // 使用正确的路径分隔符
-  const basePath = contextMenu.value.parentPath.replace(/\\/g, '/');
-  const folderPath = basePath + '/' + name;
-  try {
-    await invoke("create_directory", { path: folderPath });
-    await loadFileTree();
-  } catch (err) {
-    alert("创建文件夹失败: " + err);
-  }
-  hideContextMenu();
-}
-
-function handleRename() {
-  if (!contextMenu.value.target) return;
-  renaming.value = {
-    active: true,
-    path: contextMenu.value.target.path,
-    originalName: contextMenu.value.target.name,
-    input: contextMenu.value.target.name,
-  };
-  hideContextMenu();
-
-  // 使用 nextTick 确保 DOM 更新后再聚焦
-  nextTick(() => {
-    const input = document.querySelector('.rename-input') as HTMLInputElement;
-    if (input) {
-      input.focus();
-      input.select(); // 选中全部文本，方便用户直接输入
-    }
-  });
-}
-
-async function confirmRename() {
-  if (!renaming.value.input || renaming.value.input === renaming.value.originalName) {
-    cancelRename();
-    return;
-  }
-
-  // 验证新名称
-  const newName = renaming.value.input;
-  if (newName.includes('/') || newName.includes('\\') || newName.includes(':') ||
-      newName.includes('*') || newName.includes('?') || newName.includes('"') ||
-      newName.includes('<') || newName.includes('>') || newName.includes('|')) {
-    alert("名称包含非法字符，请使用有效的名称");
-    cancelRename();
-    return;
-  }
-
-  const oldPath = renaming.value.path;
-  // 使用正确的路径分隔符处理
-  const normalizedOldPath = oldPath.replace(/\\/g, '/');
-  const parentPath = normalizedOldPath.substring(0, normalizedOldPath.lastIndexOf('/'));
-  const newPath = parentPath + '/' + newName;
-
-  try {
-    await invoke("rename_path", { oldPath, newPath });
-    await loadFileTree();
-
-    // 如果重命名的文件正在编辑器中打开，更新标签页信息
-    const tab = tabs.value.find(t => t.path === oldPath);
-    if (tab) {
-      tab.path = newPath;
-      tab.name = newName;
-    }
-  } catch (err) {
-    alert("重命名失败: " + err);
-  }
-  cancelRename();
-}
-
-function cancelRename() {
-  renaming.value = {
-    active: false,
-    path: '',
-    originalName: '',
-    input: '',
-  };
-}
-
-async function handleDelete() {
-  if (!contextMenu.value.target) return;
-  const targetName = contextMenu.value.target.name;
-  const isDir = contextMenu.value.target.is_dir;
-  const message = isDir
-    ? `确定要删除文件夹 "${targetName}" 及其所有内容吗？此操作不可撤销。`
-    : `确定要删除文件 "${targetName}" 吗？此操作不可撤销。`;
-
-  const confirmed = window.confirm(message);
-  if (!confirmed) return;
-
-  try {
-    await invoke("delete_path", { path: contextMenu.value.target.path });
-    await loadFileTree();
-
-    // 如果删除的文件正在编辑器中打开，关闭对应的标签页
-    const tab = tabs.value.find(t => t.path === contextMenu.value.target!.path);
-    if (tab) {
-      closeTab(tab.id);
-    }
-  } catch (err) {
-    alert("删除失败: " + err);
-  }
-  hideContextMenu();
 }
 
 async function saveFile() {
@@ -1676,7 +1430,7 @@ async function saveFileAs() {
       activeTab.value.path = path;
       activeTab.value.name = path.split(/[/\\]/).pop() ?? "未命名";
       activeTab.value.saved = true;
-      if (workspacePath.value) await loadFileTree();
+      await ws.reloadPath(path);
     }
   } catch (err) {
     console.error("另存为失败:", err);
@@ -1960,21 +1714,7 @@ async function inlineImagesInMarkdown(
  */
 function renderHTMLForExport(source: string): string {
   let html = md.render(source);
-  html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
-    try {
-      const cleanTex = tex.trim();
-      return `<div class="katex-display">${katex.renderToString(cleanTex, { throwOnError: false, displayMode: true })}</div>`;
-    } catch {
-      return `<div class="katex-error">${tex}</div>`;
-    }
-  });
-  html = html.replace(/\$([^$\n]+)\$/g, (_, tex) => {
-    try {
-      return katex.renderToString(tex, { throwOnError: false });
-    } catch {
-      return tex;
-    }
-  });
+  // mermaid (需读取 <code> 内容,故在代码块保护之前)
   html = html.replace(
     /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
     (_, code) => {
@@ -1987,6 +1727,34 @@ function renderHTMLForExport(source: string): string {
       return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}">${escapeHtml(decoded)}</div>`;
     },
   );
+  // 暂存所有代码块(<pre>/<code>),避免 $...$ 公式正则穿透到代码内部(与预览管线一致)
+  const codeStore: string[] = [];
+  const stash = (m: string) => {
+    const i = codeStore.length;
+    codeStore.push(m);
+    return `\u0000C${i}\u0000`;
+  };
+  html = html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/g, stash);
+  html = html.replace(/<code\b[^>]*>[\s\S]*?<\/code>/g, stash);
+  // 块级公式（多行 $...$）
+  html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
+    try {
+      const cleanTex = tex.trim();
+      return `<div class="katex-display">${katex.renderToString(cleanTex, { throwOnError: false, displayMode: true })}</div>`;
+    } catch {
+      return `<div class="katex-error">${tex}</div>`;
+    }
+  });
+  // 行内公式（单行 $...$）
+  html = html.replace(/\$([^$\n]+)\$/g, (_, tex) => {
+    try {
+      return katex.renderToString(tex, { throwOnError: false });
+    } catch {
+      return tex;
+    }
+  });
+  // 还原代码块
+  html = html.replace(/\u0000C(\d+)\u0000/g, (_, i) => codeStore[+i]);
   return html;
 }
 
@@ -2063,17 +1831,17 @@ ${mermaidJs}
   }
 }
 
-const showPrintHint = ref(localStorage.getItem("pdfHintShown") === "true");
+const showPrintHint = ref(false);
 
 /**
  * 组装打印用独立 HTML 文档(空 title 避免页眉显示应用名)。
  */
-function buildPrintHtml(bodyHtml: string, theme: ReturnType<typeof captureCurrentTheme>): string {
+function buildPrintHtml(bodyHtml: string, theme: ReturnType<typeof captureCurrentTheme>, title: string): string {
   return `<!DOCTYPE html>
 <html lang="zh-CN" data-theme="${theme.dataTheme}"${theme.isDark ? ' class="dark"' : ""}>
 <head>
 <meta charset="UTF-8">
-<title></title>
+<title>${escapeHtml(title)}</title>
 <style>
 :root {
   --ink-font: ${theme.fontFamily};
@@ -2155,12 +1923,17 @@ async function printDocument(): Promise<void> {
   const withToc = preprocessToc(withImages, headings.value);
   const bodyHtml = renderHTMLForExport(withToc);
   const theme = captureCurrentTheme();
-  const docHtml = buildPrintHtml(bodyHtml, theme);
+  const title = tab.name.replace(/\.[^.]+$/, "") || "文档";
+  const docHtml = buildPrintHtml(bodyHtml, theme, title);
 
   const iframe = document.createElement('iframe');
   iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;border:0;';
   document.body.appendChild(iframe);
 
+  // WebView2 打印"另存为 PDF"默认文件名取自主窗口 document.title(而非 iframe title),
+  // 故打印前临时切换为文档名,打印后恢复
+  const origDocTitle = document.title;
+  document.title = title;
   try {
     const doc = iframe.contentWindow!.document;
     doc.open();
@@ -2172,12 +1945,26 @@ async function printDocument(): Promise<void> {
     iframe.contentWindow!.focus();
     iframe.contentWindow!.print();
   } finally {
+    document.title = origDocTitle;
     setTimeout(() => iframe.remove(), 2000);
   }
 }
 
 async function exportPDF() {
   if (!activeTab.value) return;
+  if (localStorage.getItem("pdfHintShown") === "true") {
+    try {
+      await printDocument();
+    } catch (e) {
+      console.error("打印失败:", e);
+    }
+  } else {
+    // 首次导出:先弹出说明,待用户确认后再打印
+    showPrintHint.value = true;
+  }
+}
+
+async function dismissPrintHint() {
   showPrintHint.value = false;
   localStorage.setItem("pdfHintShown", "true");
   try {
@@ -2185,11 +1972,6 @@ async function exportPDF() {
   } catch (e) {
     console.error("打印失败:", e);
   }
-}
-
-function dismissPrintHint() {
-  showPrintHint.value = false;
-  localStorage.setItem("pdfHintShown", "true");
 }
 
 function toggleSidebar() {
@@ -2506,9 +2288,12 @@ onMounted(async () => {
   // 加载最近文件
   loadRecentFiles();
 
+  // 初始化工作区(应用内库 + 恢复最近打开的外部文件夹)
+  ws.init();
+
   // 全局点击隐藏右键菜单
   document.addEventListener('click', () => {
-    hideContextMenu();
+    ws.hideContextMenu();
   });
 
   autoSaveInterval.value = window.setInterval(() => {
@@ -2774,59 +2559,9 @@ onUnmounted(() => {
               <span>🖼️</span>
               <span>资源</span>
             </button>
-            <button v-if="sidebarMode === 'tree'" @click="loadFileTree" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1 flex-shrink-0" title="刷新">🔄</button>
           </div>
-          <!-- 文件树视图 -->
-          <div v-if="sidebarMode === 'tree'" class="file-tree" @contextmenu="showContextMenuOnTree">
-            <div v-if="!workspacePath" class="text-xs text-gray-400 dark:text-gray-500 px-2 py-4 text-center">
-              <div class="mb-2">📂 请先打开文件夹</div>
-              <button
-                @click="openFolder"
-                class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs"
-              >
-                打开文件夹
-              </button>
-            </div>
-            <div v-else-if="fileTree.length === 0" class="text-xs text-gray-400 dark:text-gray-500 px-2 py-4 text-center">
-              <div class="mb-2">📁 文件夹为空</div>
-              <div class="text-gray-300 dark:text-gray-600">右键点击可新建文件</div>
-            </div>
-            <component v-else :is="() => h('div', {}, renderFileTree(fileTree))" />
-          </div>
-
-          <!-- 右键菜单 -->
-          <div
-            v-if="contextMenu.visible"
-            class="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1 z-50"
-            :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
-            @contextmenu.stop
-          >
-            <div
-              class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-              @click="handleNewFile"
-            >
-              📄 新建文件
-            </div>
-            <div
-              class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-              @click="handleNewFolder"
-            >
-              📁 新建文件夹
-            </div>
-            <div class="border-t border-gray-200 dark:border-gray-700 my-1"></div>
-            <div
-              class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
-              @click="handleRename"
-            >
-              ✏️ 重命名
-            </div>
-            <div
-              class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-red-500"
-              @click="handleDelete"
-            >
-              🗑️ 删除
-            </div>
-          </div>
+          <!-- 文件树视图(双区:应用内库 + 外部文件夹,逻辑见 useWorkspace) -->
+          <TheFileTree v-if="sidebarMode === 'tree'" />
           <!-- 大纲视图 -->
           <div v-else-if="sidebarMode === 'outline'" class="outline-view">
             <div v-if="headings.length === 0" class="text-xs text-gray-400 dark:text-gray-500 px-2 py-4 text-center">

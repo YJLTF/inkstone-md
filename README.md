@@ -26,7 +26,11 @@
 
 - **大纲 / TOC 侧边栏**:点击同步跳转编辑器 + 预览区,当前标题高亮跟随滚动
 - **编辑/预览滚动同步**:分栏模式下双向滚动比例同步,状态栏开关 + `F7` 快捷键切换,默认开启
-- **文件树侧边栏**:打开文件夹,右键新建 / 重命名 / 删除
+- **双区文件树侧边栏**:
+  - 📚 **我的库**:应用内工作区,默认根节点开箱即用,支持文件/文件夹的完整 新建/重命名/删除/移动,可一键「迁移库」到任意位置(含已开文档路径重映射)
+  - 📁 **外部文件夹**:打开系统任意目录,只读目录结构、仅可操作文件(不可改动文件夹)
+  - 树状视图:展开/收起箭头 + 层级竖线引导,每级(含库根/外部根)可折叠;库(蓝色系)与外部(琥珀色系)视觉明显区分
+  - 拖拽移动:文件/文件夹可拖到任意目录(含根),支持跨盘符、跨库/外部,自动防拖入自身子树
 - **资源管理面板**:自动扫描当前文档引用的所有图片,支持
   - 📂 在文件夹中显示(explorer / Finder / xdg-open)
   - ✏️ 重命名 / 📁 移动 / 🗜️ 一键压缩(jpeg / png)
@@ -42,7 +46,7 @@
 - **拖拽打开**:把文件拖到窗口即可打开
 - **30 秒自动保存**:避免误关丢失
 - **导出 HTML**:**单文件全内联**(KaTeX CSS + highlight.js 主题 + Mermaid JS + 当前主题 + 图片 base64),离线双击即可正常显示
-- **导出 PDF**:走 WebView 系统打印 + `Microsoft Print to PDF`,文字可选可搜索、体积小、样式 = 预览所见即所得
+- **导出 PDF**:隐藏 iframe 打印,文字可选可搜索、样式 = 预览所见即所得;打印对话框选「另存为 PDF」文件名自动取文档名
 
 ### 主题与个性化
 
@@ -90,7 +94,7 @@ npm run tauri build        # 打包出 NSIS 安装包(.exe)
 `npm run tauri build` 完成后,安装包位于:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.5.0_x64-setup.exe
 ```
 
 双击安装即可,Windows 会自动注册 `.md` / `.markdown` / `.txt` 文件关联。
@@ -101,9 +105,13 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
 
 ## 使用
 
-### 打开文件夹
+### 工作区(文件树)
 
-`Ctrl+O` 打开文件,或工具栏 `📁 文件夹` 打开整个工作区,左侧出现文件树;右键可新建 / 重命名 / 删除。
+侧边栏「📁 文件树」分两区:
+- 📚 **我的库**:应用自带的文档库,首次启动自动创建;右键可新建 文件/文件夹、重命名、删除、拖拽移动;库标题 `⋯` 菜单可「迁移库」到自选目录
+- 📁 **外部文件夹**:工具栏 `📁 文件夹` 打开系统任意目录(只读目录结构,仅可操作文件);关闭即从最近记录移除,重启不再恢复
+
+任意目录(含库根/外部根)支持展开收起;文件/文件夹可拖拽到目标目录,支持跨盘符。
 
 ### 切换主题
 
@@ -116,7 +124,7 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
 ### 导出
 
 - **HTML**:工具栏 `📤 HTML` 按钮,弹出保存对话框,生成的 `.html` 包含完整样式 + 主题 + 所有图片(base64) + Mermaid/KaTeX 依赖,完全离线可用
-- **PDF**:工具栏 `📄 PDF` 按钮,自动切到预览模式后调用系统打印对话框。在打印机下拉里选 `Microsoft Print to PDF`(Win10/11 自带)即可另存为 PDF。首次使用会弹一次性提示
+- **PDF**:工具栏 `📄 PDF` 按钮,调用系统打印对话框。在打印机下拉里选 **「另存为 PDF」**(Microsoft Edge),文件名自动取当前文档名、样式与预览一致;首次使用弹一次性说明
 
 ### 表格编辑
 
@@ -159,9 +167,14 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
 ```
 inkstone-md/
 ├── src/                       # Vue 前端源码
-│   ├── App.vue                # 主组件(编辑器、文件树、工具栏、状态栏)
+│   ├── App.vue                # 主组件(布局壳 + 编辑器/导出/快捷键编排)
 │   ├── main.ts                # Vue 入口
-│   └── style.css              # 全局样式 + 4 套主题
+│   ├── style.css              # 全局样式 + 4 套主题
+│   ├── components/            # SFC 组件(工具栏/Tab/编辑器/文件树/对话框…)
+│   ├── composables/           # 组合式逻辑(useWorkspace 双区文件树…)
+│   ├── types/                 # TypeScript 类型声明
+│   ├── utils.ts               # 纯工具函数
+│   └── constants/             # 常量(导出 CSS 等)
 ├── src-tauri/                 # Tauri 后端
 │   ├── src/
 │   │   ├── lib.rs             # Rust 库入口(命令、单实例、文件打开)
@@ -188,11 +201,42 @@ inkstone-md/
 | `read_directory` | 递归读取目录(忽略 `.` 开头) |
 | `create_file` / `create_directory` | 创建 |
 | `rename_path` / `delete_path` | 重命名 / 删除 |
-| `reveal_in_folder` | 在系统文件管理器中显示(explorer / open -R / xdg-open) |
+| `move_path` | 移动文件/文件夹到目标目录(跨盘符 copy+delete 回退) |
+| `reveal_in_folder` | 在系统文件管理器中显示(目录直接打开内容,文件定位选中) |
+| `ensure_library` | 初始化/获取应用内库根目录(app data 默认,可迁移) |
+| `migrate_library` | 迁移库根到新目录(搬移现有文档 + 更新配置) |
 | `compress_image` | 图片重新编码为 jpeg / png,返回压缩后字节数 |
 | `frontend_ready` | 前端握手,触发启动挂起文件的派发 |
 
 ## 版本记录
+
+### [1.5.0] - 双区文件树重构
+
+重构侧边栏文件树为双区模型,新增文件/文件夹移动、应用内库、外部文件夹持久化等。详见 [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md)。
+
+#### ✨ 新增
+- **双区文件树**:
+  - 📚 **我的库**:应用内工作区,首次启动自动在 app data 目录建默认库根,支持文件/文件夹完整 新建/重命名/删除/移动,可一键「迁移库」到自选目录(含已开文档路径重映射)
+  - 📁 **外部文件夹**:打开系统任意目录,只读目录结构、仅可操作文件(不可新建/重命名/删除/移动文件夹)
+  - **拖拽移动**:树内拖拽文件/文件夹到任意目录(含根),支持跨盘符(copy+delete 回退)、跨库/外部,防拖入自身子树;另提供右键「移动到…」
+  - **持久化与恢复**:外部文件夹最近列表存 `tauri-plugin-store`,重启自动恢复;路径失效标灰可一键移除
+- **树状视图**:展开/收起箭头(▾/▸)+ 层级竖线引导,每级(含库根/外部根)可折叠;库根(蓝色系)与外部根(琥珀色系)视觉明显区分
+- 新增 Rust 命令:`ensure_library` / `migrate_library` / `move_path`(跨盘符安全移动)
+- 新增依赖:`tauri-plugin-store`(配置持久化)、前端 `@tauri-apps/plugin-store`
+
+#### 🏗️ 重构
+- **文件树逻辑抽离**:从 App.vue 抽出 `useWorkspace.ts` composable(多根模型 + CRUD + 移动 + 拖拽 + 持久化 + 库迁移)与 `TheFileTree.vue` + 递归 `TreeNode.vue` 组件,替换原 `h()` 手写递归;App.vue 减约 430 行
+- **增量更新**:文件树 CRUD/移动改为局部节点增删改,不再整根重读目录
+- 三处 version 同步到 `1.5.0`
+
+#### 🐛 修复
+- **代码块内容被二次渲染**:`highlight` 无语言分支未转义(代码块内 `<tag>`/HTML 实体被当 HTML 渲染)+ katex/TOC/图片预处理正则穿透 `<code>` 内部;新增 `mapOutsideCode` 让预处理跳过代码块,katex 替换前暂存代码块、替换后还原
+- **`reveal_in_folder` 对目录用 `/select` 导致打开父目录**:目录改为直接打开其内容(文件仍 `/select` 定位),Win/macOS/Linux 三分支统一
+- **新建落到根目录**:右键文件夹时 parentPath 现正确指向文件夹内部
+- **PDF 公式被当代码块**:导出管线与预览对齐(mermaid 前置 + 代码块保护 + katex)
+- **PDF 默认文件名空白**:打印前临时切换主窗口 `document.title` 为文档名;PrintHint 引导选「另存为 PDF」(文件名自动取文档名)
+- **PDF 说明反复弹出**:改为首次点导出才弹一次,确认后打印并标记
+- **外部文件夹关闭后重启又出现**:✕ 关闭改为同时移除最近记录
 
 ### [1.4.0] - 架构治理与 PDF 导出修复
 
@@ -326,7 +370,7 @@ inkstone-md/
 
 ## 路线图
 
-V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)、[ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md) 与 [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)(各期优化的详细记录与剩余工作项)。
+V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)、[ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)、[ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)、[ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md) 与 [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md)(各期优化的详细记录与剩余工作项)。
 
 ## 贡献
 
