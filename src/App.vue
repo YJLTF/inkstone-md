@@ -2163,13 +2163,21 @@ function replaceAll() {
 }
 
 // 拖拽事件处理
+// 仅响应从系统拖入的外部文件(types 含 "Files"),
+// 忽略文件树内部拖拽(其 types 为 "text/plain"),避免误触发蒙层。
+function isExternalFileDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+}
+
 function handleDragEnter(e: DragEvent) {
+  if (!isExternalFileDrag(e)) return;
   e.preventDefault();
   dragCounter.value++;
   isDragging.value = true;
 }
 
 function handleDragLeave(e: DragEvent) {
+  if (!isExternalFileDrag(e)) return;
   e.preventDefault();
   dragCounter.value--;
   if (dragCounter.value <= 0) {
@@ -2179,6 +2187,7 @@ function handleDragLeave(e: DragEvent) {
 }
 
 function handleDragOver(e: DragEvent) {
+  if (!isExternalFileDrag(e)) return;
   e.preventDefault();
 }
 
@@ -2190,27 +2199,31 @@ async function handleDrop(e: DragEvent) {
   const files = e.dataTransfer?.files;
   if (!files || files.length === 0) return;
 
-  // 支持的图片格式
+  // dragDropEnabled:false 下拿不到本地绝对路径(Chromium 安全限制),
+  // 只能直接从 File 对象读取内容/字节。
   const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
+  const docExtensions = ['md', 'markdown', 'txt'];
 
-  // 处理每个拖拽的文件
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    const path = (file as any).path;
-    if (path) {
-      const ext = path.toLowerCase().split('.').pop();
-      if (ext === 'md' || ext === 'markdown' || ext === 'txt') {
-        await openFile(path);
-      } else if (imageExtensions.includes(ext || '')) {
-        // 处理图片拖拽
-        await handleImageDrop(file, path);
+    const ext = (file.name || '').toLowerCase().split('.').pop() || '';
+    if (docExtensions.includes(ext)) {
+      try {
+        const text = await file.text();
+        const tab = createNewTab(null, text);
+        tab.name = file.name || "未命名";
+        tab.saved = false;
+      } catch (err) {
+        console.error("读取拖入文件失败:", err);
       }
+    } else if (imageExtensions.includes(ext)) {
+      await handleImageDrop(file);
     }
   }
 }
 
 // 处理图片拖拽
-async function handleImageDrop(file: File, sourcePath: string) {
+async function handleImageDrop(file: File) {
   if (!activeTab.value) return;
 
   // 检查文件是否已保存
@@ -2227,12 +2240,11 @@ async function handleImageDrop(file: File, sourcePath: string) {
     const currentDir = pathParts.join('/');
 
     // 生成目标文件名（使用原文件名）
-    const fileName = (file as any).name || sourcePath.split(/[\\/]/).pop();
+    const fileName = file.name || `image-${Date.now()}.png`;
     const targetPath = `${currentDir}/${fileName}`;
 
-    // 读取源图片文件
-    const fileContent = await invoke<number[]>("read_file_bytes", { path: sourcePath });
-    const bytes = new Uint8Array(fileContent);
+    // 直接从 File 对象读取字节（dragDropEnabled:false 下拿不到本地路径）
+    const bytes = new Uint8Array(await file.arrayBuffer());
 
     // 写入目标目录
     await invoke("write_file_bytes", { path: targetPath, content: Array.from(bytes) });
