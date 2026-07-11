@@ -15,7 +15,7 @@ const emit = defineEmits<{
     <Printer :size="18" class="print-hint-icon" />
     <div class="print-hint-body flex-1">
       <strong class="print-hint-title">PDF 导出说明</strong>
-      系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>（Win10 / 11 自带）即可另存为 PDF。文字可选可搜索，样式与预览完全一致。建议在「更多设置」中关闭<strong>页眉和页脚</strong>，以获得不含日期和标题的纯净 PDF。
+      系统打印对话框已就绪。在「打印机」下拉里选 <strong>另存为 PDF</strong>（Microsoft Edge 自带），文件名会自动填为当前文档名、文字可选可搜索、样式与预览完全一致。若选 <code>Microsoft Print to PDF</code>（系统虚拟打印机）则文件名需手动填写。建议在「更多设置」中关闭<strong>页眉和页脚</strong>，以获得不含日期和标题的纯净 PDF。
     </div>
     <button class="print-hint-close" title="知道了" @click="emit('dismiss')">
       <X :size="14" />

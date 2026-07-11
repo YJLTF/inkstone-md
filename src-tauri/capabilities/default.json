@@ -9,6 +9,7 @@
     "core:event:allow-emit",
     "core:event:allow-listen",
     "deep-link:default",
+    "store:default",
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",

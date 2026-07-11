@@ -25,7 +25,10 @@ A lightweight and elegant desktop Markdown editor built with Tauri 2 + Vue 3. Ou
 ### View & navigation
 
 - **Outline / TOC sidebar**:one-click jump to the corresponding heading
-- **File tree sidebar**:open a workspace, right-click to create / rename / delete
+- **Dual-zone file tree sidebar**:
+  - 📚 **My Library**: in-app workspace with a default root ready out of the box; full create / rename / delete / move for files and folders; one-click library migration
+  - 📁 **External folders**: open any system directory as read-only structure; only file operations allowed
+  - Tree visuals: expand/collapse arrows + per-level guide lines; drag-to-move across drives and between zones
 - **Assets panel**:scans every image referenced by the current document. Supports
   - 📂 Reveal in OS file manager (explorer / Finder / xdg-open)
   - ✏️ Rename / 📁 Move / 🗜️ Compress (jpeg / png)
@@ -43,7 +46,7 @@ A lightweight and elegant desktop Markdown editor built with Tauri 2 + Vue 3. Ou
 - **Drag & drop**:drop files onto the window to open
 - **30-second auto-save**:guards against accidental close
 - **Export HTML**:fully self-contained single file — KaTeX CSS + highlight.js theme + Mermaid JS + active theme + images (base64) are all inlined. Open offline in any browser.
-- **Export PDF**:WebView system print → `Microsoft Print to PDF`. Text is selectable and searchable, file size is small, layout matches the live preview exactly.
+- **Export PDF**:hidden-iframe print; text is selectable/searchable and layout matches the preview; choose "Save as PDF" and the filename is auto-filled with the document name
 
 ### Themes & personalization
 
@@ -93,7 +96,7 @@ npm run tauri build        # produce the NSIS installer (.exe)
 After `npm run tauri build` finishes, the installer is at:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.3.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.5.0_x64-setup.exe
 ```
 
 Double-click to install. Windows will register `.md` / `.markdown` / `.txt` associations automatically.
@@ -104,9 +107,13 @@ Use "Control Panel → Add or remove programs". The uninstaller cleans the file-
 
 ## Usage
 
-### Open a workspace
+### Workspace (file tree)
 
-`Ctrl+O` to open a file, or use the `📁 Folder` button to open a whole workspace. The file tree appears on the left; right-click to create / rename / delete.
+The sidebar **File tree** has two zones:
+- 📚 **My Library**: the in-app document library, auto-created on first launch; right-click to create files/folders, rename, delete, or drag to move; the `⋯` menu on the library header lets you migrate the library
+- 📁 **External folders**: the `📁 Folder` button opens any system directory (read-only structure, file operations only); closing removes it from recents
+
+Every directory (including roots) can be expanded/collapsed; files and folders can be dragged to a target directory, across drives supported.
 
 ### Switch theme
 
@@ -119,7 +126,7 @@ Open the second sidebar tab `🖼️ Assets` to see every image referenced by th
 ### Export
 
 - **HTML**:click `📤 HTML` in the toolbar, pick a path. The produced `.html` contains every style, the active theme, all images as base64, and the Mermaid / KaTeX runtime — open it offline in any browser, no network needed.
-- **PDF**:click `📄 PDF` in the toolbar. The app switches to preview mode and calls the system print dialog. Pick `Microsoft Print to PDF` (built in on Win 10 / 11) to save as PDF. A one-time hint banner shows on first use.
+- **PDF**:click `📄 PDF` in the toolbar to open the system print dialog. Pick **"Save as PDF"** (Microsoft Edge) — the filename is auto-filled with the current document name and the layout matches the preview. A one-time hint shows on first use.
 
 ### Table editing
 
@@ -162,9 +169,14 @@ It expands to a multi-level outline based on all `# / ## / ###` headings. Click 
 ```
 inkstone-md/
 ├── src/                       # Vue frontend source
-│   ├── App.vue                # Main component (editor, file tree, toolbar, status bar)
+│   ├── App.vue                # Main component (layout shell + editor/export/shortcut orchestration)
 │   ├── main.ts                # Vue entry
-│   └── style.css              # Global styles + 4 themes
+│   ├── style.css              # Global styles + 4 themes
+│   ├── components/            # SFC components (toolbar/tab/editor/file tree/dialogs…)
+│   ├── composables/           # Composition logic (useWorkspace dual-zone file tree…)
+│   ├── types/                 # TypeScript declarations
+│   ├── utils.ts               # Pure utility functions
+│   └── constants/             # Constants (export CSS etc.)
 ├── src-tauri/                 # Tauri backend
 │   ├── src/
 │   │   ├── lib.rs             # Rust library entry (commands, single instance, file open)
@@ -191,11 +203,54 @@ inkstone-md/
 | `read_directory` | Recursive directory listing (skip dotfiles) |
 | `create_file` / `create_directory` | Create |
 | `rename_path` / `delete_path` | Rename / delete |
-| `reveal_in_folder` | Reveal in OS file manager (explorer / open -R / xdg-open) |
+| `move_path` | Move file/folder to a target dir (cross-drive copy+delete fallback) |
+| `reveal_in_folder` | Reveal/open in OS file manager (dirs open directly, files are selected) |
+| `ensure_library` | Init/get the in-app library root (app data default, migratable) |
+| `migrate_library` | Migrate library root to a new dir (move docs + update config) |
 | `compress_image` | Re-encode image to jpeg / png, return compressed size |
 | `frontend_ready` | Frontend handshake, dispatches the startup pending file |
 
 ## Changelog
+
+### [1.5.0] — dual-zone file tree rebuild
+
+The sidebar file tree is rebuilt as a two-zone model. See [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md).
+
+#### ✨ Added
+- **Dual-zone file tree**:
+  - 📚 **My Library**: in-app workspace, auto-created default root in the app data dir; full create / rename / delete / move for files and folders; one-click "migrate library" to any location (open-tab paths are remapped)
+  - 📁 **External folders**: open any system directory as read-only structure; only files can be created / renamed / moved / deleted (folders are protected)
+  - **Drag to move**: drag files/folders to any directory (incl. roots); cross-drive (copy+delete fallback), cross library/external; prevents dropping into a node's own subtree
+  - **Persistence & restore**: recent external folders are stored via `tauri-plugin-store` and restored on restart; invalid paths are greyed out and removable
+- **Tree visuals**: expand/collapse arrows (▾/▸) + per-level guide lines; every level (incl. roots) is collapsible; library (blue) vs external (amber) are visually distinct
+- New Rust commands: `ensure_library` / `migrate_library` / `move_path` (cross-drive safe move)
+- New deps: `tauri-plugin-store`, `@tauri-apps/plugin-store`
+
+#### 🏗️ Refactor
+- File-tree logic extracted from App.vue into `useWorkspace.ts` composable + `TheFileTree.vue` + recursive `TreeNode.vue`, replacing the old `h()` hand-rolled recursion; App.vue shrank ~430 lines
+- Incremental tree updates: CRUD/move now patch nodes locally instead of re-reading the whole tree
+- Versions synced to `1.5.0`
+
+#### 🐛 Fixed
+- Code-block content being re-rendered (highlight's no-language branch wasn't HTML-escaped; katex/TOC/image preprocessing leaked into `<code>`); added `mapOutsideCode` + stash/restore around katex
+- `reveal_in_folder` on a directory opened its parent (used `/select`); directories now open their content directly
+- New file landed at root instead of the right-clicked folder
+- PDF math rendered as code blocks (export pipeline aligned with preview)
+- PDF default filename blank (now set from `document.title` before print)
+- PDF hint reappearing (now shown once on first export)
+- External folder reappearing after restart (close now also removes from recents)
+
+### [1.4.0] — architecture cleanup & PDF export fixes
+
+Two tasks: rebuild PDF export and split App.vue into components. See [ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md).
+
+#### 🐛 Fixed
+- **PDF export rebuilt** with a hidden iframe: no more toolbar/sidebar/status-bar leaking into the PDF, long documents are no longer clipped, and the header no longer shows "InkStone MD"
+- Updated the print hint to guide users to disable headers/footers
+
+#### 🏗️ Refactor
+- **App.vue split**: 4400 → ~3000 lines; added `src/components/`, `src/types/`, `src/utils.ts`, `src/constants/`; extracted 8 SFC components
+- Versions synced to `1.4.0`
 
 ### [1.3.0] — feature completion & experience fixes
 
@@ -282,7 +337,7 @@ Earlier development snapshot. Implemented multi-tab, file tree, search & replace
 
 ## Roadmap
 
-V1.x candidates are tracked in [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md) (DOCX export, spell-check, font preferences, etc.) and [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md) (detailed record of this optimization pass and remaining follow-ups).
+V1.x candidates are tracked in [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md) (DOCX export, spell-check, font preferences, etc.), [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md), [ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md) and [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md) (detailed records of each pass and remaining follow-ups).
 
 ## Contributing
 

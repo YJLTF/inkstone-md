@@ -156,33 +156,161 @@ fn delete_path(path: &str) -> Result<(), String> {
     }
 }
 
-/// 在系统文件管理器中"显示"该路径(Win: explorer /select,mac: open -R,linux: xdg-open 父目录)
+/// 递归复制目录树(src -> dst),用于跨盘符移动的回退路径。
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_all(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// 移动 src 到 dst_dir 目录下(保留文件名)。优先 rename(同盘符原子操作),
+/// 失败(Windows 跨盘符)则回退为 copy + delete。
+#[tauri::command]
+fn move_path(src: &str, dst_dir: &str) -> Result<(), String> {
+    let src = Path::new(src);
+    let dst_dir = Path::new(dst_dir);
+    if !src.exists() {
+        return Err("源路径不存在".to_string());
+    }
+    if !dst_dir.is_dir() {
+        return Err("目标不是目录".to_string());
+    }
+    let file_name = src
+        .file_name()
+        .ok_or_else(|| "无法获取文件名".to_string())?;
+    let dst = dst_dir.join(file_name);
+    if dst.exists() {
+        return Err("目标已存在同名项".to_string());
+    }
+    if std::fs::rename(src, &dst).is_ok() {
+        return Ok(());
+    }
+    if src.is_dir() {
+        copy_dir_all(src, &dst)?;
+        std::fs::remove_dir_all(src).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::copy(src, &dst).map_err(|e| e.to_string())?;
+        std::fs::remove_file(src).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 确保应用内库根目录存在:优先读 store 中的 libraryPath;
+/// 为空则用 app_data_dir/InkStoneMD/library 建默认库并写回。返回库根路径。
+#[tauri::command]
+fn ensure_library(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+
+    if let Some(val) = store.get("libraryPath") {
+        if let Some(p) = val.as_str() {
+            if Path::new(p).is_dir() {
+                return Ok(p.to_string());
+            }
+        }
+    }
+
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let lib = data_dir.join("InkStoneMD").join("library");
+    std::fs::create_dir_all(&lib).map_err(|e| e.to_string())?;
+    let lib_str = lib.to_string_lossy().to_string();
+    store.set("libraryPath", serde_json::json!(lib_str));
+    store.save().map_err(|e| e.to_string())?;
+    Ok(lib_str)
+}
+
+/// 迁移库根到 new_path:把当前库内容搬到新目录,更新 store 的 libraryPath。
+/// 目标目录必须为空或不存在。返回新库路径。
+#[tauri::command]
+fn migrate_library(app: AppHandle, new_path: String) -> Result<String, String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+
+    let old = store
+        .get("libraryPath")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .ok_or_else(|| "未配置 libraryPath".to_string())?;
+    let old_path = Path::new(&old);
+    let new_p = Path::new(&new_path);
+
+    if new_p.exists() {
+        if !new_p.is_dir() {
+            return Err("目标路径不是目录".to_string());
+        }
+        if std::fs::read_dir(new_p).map_err(|e| e.to_string())?.count() > 0 {
+            return Err("目标目录非空".to_string());
+        }
+    } else {
+        std::fs::create_dir_all(new_p).map_err(|e| e.to_string())?;
+    }
+
+    if old_path.exists() && old_path.is_dir() {
+        for entry in std::fs::read_dir(old_path).map_err(|e| e.to_string())? {
+            let e = entry.map_err(|e| e.to_string())?;
+            let ep = e.path();
+            let dst = new_p.join(e.file_name());
+            if std::fs::rename(&ep, &dst).is_err() {
+                if ep.is_dir() {
+                    copy_dir_all(&ep, &dst)?;
+                    let _ = std::fs::remove_dir_all(&ep);
+                } else {
+                    std::fs::copy(&ep, &dst).map_err(|e| e.to_string())?;
+                    let _ = std::fs::remove_file(&ep);
+                }
+            }
+        }
+    }
+
+    store.set("libraryPath", serde_json::json!(new_path));
+    store.save().map_err(|e| e.to_string())?;
+    Ok(new_path)
+}
+
+/// 在系统文件管理器中"显示"该路径。目录直接打开其内容,文件则打开所在目录并选中。
 #[tauri::command]
 fn reveal_in_folder(path: &str) -> Result<(), String> {
     let p = Path::new(path);
     if !p.exists() {
         return Err("路径不存在".to_string());
     }
+    let is_dir = p.is_dir();
     #[cfg(target_os = "windows")]
     {
-        // explorer /select,"<path>"  会聚焦到该文件;空格 / 中文路径用 arg 自动加引号
+        // 目录:直接打开该目录;文件:explorer /select,<path> 聚焦到该文件
+        let arg = if is_dir { path.to_string() } else { format!("/select,{}", path) };
         std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path))
+            .arg(arg)
             .spawn()
             .map_err(|e| format!("explorer 启动失败: {}", e))?;
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .args(["-R", path])
-            .spawn()
-            .map_err(|e| format!("open 启动失败: {}", e))?;
+        if is_dir {
+            std::process::Command::new("open")
+                .arg(path)
+                .spawn()
+                .map_err(|e| format!("open 启动失败: {}", e))?;
+        } else {
+            std::process::Command::new("open")
+                .args(["-R", path])
+                .spawn()
+                .map_err(|e| format!("open 启动失败: {}", e))?;
+        }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let parent = p.parent().unwrap_or(Path::new("/"));
+        let target = if is_dir { p } else { p.parent().unwrap_or(Path::new("/")) };
         std::process::Command::new("xdg-open")
-            .arg(parent)
+            .arg(target)
             .spawn()
             .map_err(|e| format!("xdg-open 启动失败: {}", e))?;
     }
@@ -315,6 +443,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(StartupFile(pick_openable_path(std::env::args().collect::<Vec<_>>())))
         .invoke_handler(tauri::generate_handler![
             read_file,
@@ -329,6 +458,9 @@ pub fn run() {
             delete_path,
             reveal_in_folder,
             compress_image,
+            ensure_library,
+            migrate_library,
+            move_path,
             frontend_ready,
         ])
         .setup(|app| {
