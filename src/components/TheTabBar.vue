@@ -73,14 +73,14 @@ defineEmits<{
   background: rgba(0, 0, 0, 0.08);
   color: #2563eb;
 }
-:global(.dark) .tab-icon-btn {
+.dark .tab-icon-btn {
   color: #9ca3af;
 }
-:global(.dark) .tab-icon-btn:hover {
+.dark .tab-icon-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #f3f4f6;
 }
-:global(.dark) .tab-icon-btn.active {
+.dark .tab-icon-btn.active {
   background: rgba(255, 255, 255, 0.1);
   color: #93c5fd;
 }
@@ -115,14 +115,14 @@ defineEmits<{
 .tab-item:hover .tab-close {
   opacity: 1;
 }
-:global(.dark) .tab-item {
+.dark .tab-item {
   color: #9ca3af;
 }
-:global(.dark) .tab-item:hover {
+.dark .tab-item:hover {
   background: rgba(255, 255, 255, 0.05);
   color: #f3f4f6;
 }
-:global(.dark) .tab-item.active {
+.dark .tab-item.active {
   background: #1f2937;
   color: #f3f4f6;
   border-bottom-color: #60a5fa;

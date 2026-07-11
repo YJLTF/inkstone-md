@@ -2987,32 +2987,24 @@ onUnmounted(() => {
   width: 8px;
   height: 8px;
 }
-
 ::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
+  background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: rgba(0, 0, 0, 0.15);
   border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #a1a1a1;
+  background: rgba(0, 0, 0, 0.25);
 }
-
-/* 深色模式滚动条 */
-.dark ::-webkit-scrollbar-track {
-  background: #1f2937;
-}
-
 .dark ::-webkit-scrollbar-thumb {
-  background: #4b5563;
+  background: rgba(255, 255, 255, 0.15);
 }
-
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: #6b7280;
+  background: rgba(255, 255, 255, 0.25);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* KaTeX 块级公式样式 */
@@ -3035,30 +3027,5 @@ onUnmounted(() => {
 .dark .katex-error {
   background: #7f1d1d;
   color: #fecaca;
-}
-
-/* 自定义滚动条 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
-}
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
 }
 </style>

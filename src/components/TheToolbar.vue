@@ -285,7 +285,7 @@ onUnmounted(() => {
   padding-left: 8px;
   margin-left: 4px;
 }
-:global(.dark) .toolbar-group + .toolbar-group {
+.dark .toolbar-group + .toolbar-group {
   border-left-color: rgba(255, 255, 255, 0.08);
 }
 .toolbar-btn {
@@ -320,12 +320,12 @@ onUnmounted(() => {
   background: rgba(59, 130, 246, 0.12);
   color: #2563eb;
 }
-:global(.dark) .toolbar-btn { color: #9ca3af; }
-:global(.dark) .toolbar-btn:hover {
+.dark .toolbar-btn { color: #9ca3af; }
+.dark .toolbar-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #f3f4f6;
 }
-:global(.dark) .toolbar-btn.active {
+.dark .toolbar-btn.active {
   background: rgba(96, 165, 250, 0.18);
   color: #93c5fd;
 }
@@ -349,8 +349,8 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.06);
   border-color: rgba(0, 0, 0, 0.08);
 }
-:global(.dark) .toolbar-select { color: #9ca3af; }
-:global(.dark) .toolbar-select:hover {
+.dark .toolbar-select { color: #9ca3af; }
+.dark .toolbar-select:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.1);
 }
@@ -375,7 +375,7 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.06);
   margin: 4px 0;
 }
-:global(.dark) .overflow-menu-divider { background: rgba(255, 255, 255, 0.08); }
+.dark .overflow-menu-divider { background: rgba(255, 255, 255, 0.08); }
 .overflow-menu-item {
   display: flex;
   align-items: center;
@@ -391,6 +391,6 @@ onUnmounted(() => {
   transition: background-color 100ms ease;
 }
 .overflow-menu-item:hover { background: rgba(0, 0, 0, 0.05); }
-:global(.dark) .overflow-menu-item { color: #d1d5db; }
-:global(.dark) .overflow-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
+.dark .overflow-menu-item { color: #d1d5db; }
+.dark .overflow-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
 </style>

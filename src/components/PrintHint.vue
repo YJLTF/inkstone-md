@@ -66,14 +66,14 @@ const emit = defineEmits<{
   background: rgba(0, 0, 0, 0.06);
   color: #374151;
 }
-:global(.dark) .print-hint {
+.dark .print-hint {
   background: #1f2937;
   border-color: #374151;
   color: #d1d5db;
 }
-:global(.dark) .print-hint-body strong { color: #f3f4f6; }
-:global(.dark) .print-hint-close { color: #6b7280; }
-:global(.dark) .print-hint-close:hover {
+.dark .print-hint-body strong { color: #f3f4f6; }
+.dark .print-hint-close { color: #6b7280; }
+.dark .print-hint-close:hover {
   background: rgba(255, 255, 255, 0.08);
   color: #d1d5db;
 }

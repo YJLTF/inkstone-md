@@ -48,7 +48,7 @@ const emit = defineEmits<{
   color: #3b82f6;
   margin-bottom: 10px;
 }
-:global(.dark) .about-logo {
+.dark .about-logo {
   color: #60a5fa;
 }
 .about-name {
@@ -61,7 +61,7 @@ const emit = defineEmits<{
   color: #6b7280;
   margin-bottom: 14px;
 }
-:global(.dark) .about-version {
+.dark .about-version {
   color: #9ca3af;
 }
 .about-desc {
@@ -73,7 +73,7 @@ const emit = defineEmits<{
   color: #6b7280;
   margin: 4px 0;
 }
-:global(.dark) .about-meta {
+.dark .about-meta {
   color: #9ca3af;
 }
 </style>

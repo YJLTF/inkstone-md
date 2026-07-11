@@ -52,45 +52,36 @@ defineEmits<{
 </template>
 
 <style scoped>
-/* 编辑器区域 */
+/* 编辑器区域(布局属性在全局 style.css,此处仅视觉增强) */
 .editor-area {
   background: #fff;
   border: 1px solid #e5e5e5;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
 }
-:global(.dark) .editor-area {
+.dark .editor-area {
   background: #1f2937;
   border-color: #374151;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 .editor-input {
-  border: none;
-  outline: none;
-  width: 100%;
-  height: 100%;
-  resize: none;
-  padding: 1rem;
-  font-size: 16px;
-  line-height: 1.8;
-  font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
   transition: box-shadow 0.2s ease;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 .editor-input:focus {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
 }
-:global(.dark) .editor-input {
+.dark .editor-input {
   background: #1f2937;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
 }
-:global(.dark) .editor-input:focus {
+.dark .editor-input:focus {
   box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5);
 }
 .preview-area {
   border-left: 1px solid #e5e5e5;
 }
-:global(.dark) .preview-area {
+.dark .preview-area {
   border-color: #374151;
 }
 
@@ -112,7 +103,7 @@ defineEmits<{
   font-size: 12px;
   overflow-x: auto;
 }
-:global(.dark) .mermaid-error {
+.dark .mermaid-error {
   background: #422;
 }
 
@@ -146,7 +137,7 @@ defineEmits<{
   z-index: 5;
   user-select: none;
 }
-:global(.dark) :deep(.ink-image-toolbar) {
+.dark :deep(.ink-image-toolbar) {
   background: rgba(31, 41, 55, 0.95);
   border-color: #4b5563;
   color: #e5e7eb;
@@ -171,7 +162,7 @@ defineEmits<{
   font-variant-numeric: tabular-nums;
   color: #6b7280;
 }
-:global(.dark) :deep(.ink-image-scale) {
+.dark :deep(.ink-image-scale) {
   color: #9ca3af;
 }
 :deep(.ink-image-sep) {
@@ -180,7 +171,7 @@ defineEmits<{
   background: #d1d5db;
   margin: 0 2px;
 }
-:global(.dark) :deep(.ink-image-sep) {
+.dark :deep(.ink-image-sep) {
   background: #4b5563;
 }
 
@@ -194,7 +185,7 @@ defineEmits<{
   background: #f9fafb;
   font-size: 0.95em;
 }
-:global(.dark) :deep(.ink-toc) {
+.dark :deep(.ink-toc) {
   border-color: #374151;
   background: #1f2937;
 }
@@ -225,10 +216,10 @@ defineEmits<{
 :deep(.ink-toc a:hover) {
   border-bottom-color: #2563eb;
 }
-:global(.dark) :deep(.ink-toc a) {
+.dark :deep(.ink-toc a) {
   color: #93c5fd;
 }
-:global(.dark) :deep(.ink-toc a:hover) {
+.dark :deep(.ink-toc a:hover) {
   border-bottom-color: #93c5fd;
 }
 :deep(.ink-toc-empty) {
@@ -244,7 +235,7 @@ defineEmits<{
   overflow: hidden;
   border: 1px solid #e5e7eb;
 }
-:global(.dark) :deep(.ink-codeblock) {
+.dark :deep(.ink-codeblock) {
   border-color: #374151;
 }
 :deep(.ink-codeblock-toolbar) {
@@ -257,7 +248,7 @@ defineEmits<{
   font-size: 12px;
   user-select: none;
 }
-:global(.dark) :deep(.ink-codeblock-toolbar) {
+.dark :deep(.ink-codeblock-toolbar) {
   background: #1f2937;
   border-bottom-color: #374151;
 }
@@ -266,7 +257,7 @@ defineEmits<{
   text-transform: lowercase;
   font-family: ui-monospace, monospace;
 }
-:global(.dark) :deep(.ink-codeblock-lang) {
+.dark :deep(.ink-codeblock-lang) {
   color: #9ca3af;
 }
 :deep(.ink-codeblock-copy) {
@@ -288,12 +279,12 @@ defineEmits<{
   color: #fff;
   border-color: #10b981;
 }
-:global(.dark) :deep(.ink-codeblock-copy) {
+.dark :deep(.ink-codeblock-copy) {
   background: #374151;
   color: #e5e7eb;
   border-color: #4b5563;
 }
-:global(.dark) :deep(.ink-codeblock-copy:hover) {
+.dark :deep(.ink-codeblock-copy:hover) {
   background: #4b5563;
   border-color: #6b7280;
 }
@@ -338,7 +329,7 @@ defineEmits<{
   line-height: 1.5;
   flex: 0 0 auto;
 }
-:global(.dark) :deep(.ink-codeblock .ink-line-nums) {
+.dark :deep(.ink-codeblock .ink-line-nums) {
   background: rgba(255, 255, 255, 0.04);
   border-right-color: rgba(255, 255, 255, 0.06);
   color: #6b7280;
@@ -355,7 +346,7 @@ defineEmits<{
   overflow: hidden;
   border: 1px solid #e5e7eb;
 }
-:global(.dark) :deep(.ink-table) {
+.dark :deep(.ink-table) {
   border-color: #374151;
 }
 :deep(.ink-table-toolbar) {
@@ -369,7 +360,7 @@ defineEmits<{
   user-select: none;
   flex-wrap: wrap;
 }
-:global(.dark) :deep(.ink-table-toolbar) {
+.dark :deep(.ink-table-toolbar) {
   background: #1f2937;
   border-bottom-color: #374151;
 }
@@ -392,12 +383,12 @@ defineEmits<{
   color: #fff;
   border-color: #10b981;
 }
-:global(.dark) :deep(.ink-table-toolbar button) {
+.dark :deep(.ink-table-toolbar button) {
   background: #374151;
   color: #e5e7eb;
   border-color: #4b5563;
 }
-:global(.dark) :deep(.ink-table-toolbar button:hover) {
+.dark :deep(.ink-table-toolbar button:hover) {
   background: #4b5563;
   border-color: #6b7280;
 }

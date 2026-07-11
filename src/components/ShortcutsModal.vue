@@ -54,15 +54,15 @@ const emit = defineEmits<{
   padding: 7px 10px;
   border-bottom: 1px solid #e5e7eb;
 }
-:global(.dark) .shortcuts-table th,
-:global(.dark) .shortcuts-table td {
+.dark .shortcuts-table th,
+.dark .shortcuts-table td {
   border-color: #374151;
 }
 .shortcuts-table th {
   font-weight: 600;
   color: #6b7280;
 }
-:global(.dark) .shortcuts-table th {
+.dark .shortcuts-table th {
   color: #9ca3af;
 }
 .shortcuts-table code {
