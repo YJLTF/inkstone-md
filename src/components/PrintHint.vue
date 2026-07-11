@@ -14,8 +14,8 @@ const emit = defineEmits<{
   <div v-if="visible" class="print-hint" role="alert">
     <Printer :size="18" class="print-hint-icon" />
     <div class="print-hint-body flex-1">
-      <strong>PDF 导出说明</strong>
-      系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>(Win10/11 自带)即可另存为 PDF。文字可选可搜索,样式与预览完全一致。建议在「更多设置」中关闭<strong>页眉和页脚</strong>,以获得不含日期和标题的纯净 PDF。
+      <strong class="print-hint-title">PDF 导出说明</strong>
+      系统打印对话框已就绪。在「打印机」下拉里选 <code>Microsoft Print to PDF</code>（Win10 / 11 自带）即可另存为 PDF。文字可选可搜索，样式与预览完全一致。建议在「更多设置」中关闭<strong>页眉和页脚</strong>，以获得不含日期和标题的纯净 PDF。
     </div>
     <button class="print-hint-close" title="知道了" @click="emit('dismiss')">
       <X :size="14" />
@@ -48,7 +48,7 @@ const emit = defineEmits<{
   flex-shrink: 0;
   margin-top: 1px;
 }
-.print-hint-body strong {
+.print-hint-title {
   color: #111827;
   display: block;
   margin-bottom: 2px;
@@ -71,7 +71,7 @@ const emit = defineEmits<{
   border-color: #374151;
   color: #d1d5db;
 }
-.dark .print-hint-body strong { color: #f3f4f6; }
+.dark .print-hint-title { color: #f3f4f6; }
 .dark .print-hint-close { color: #6b7280; }
 .dark .print-hint-close:hover {
   background: rgba(255, 255, 255, 0.08);
