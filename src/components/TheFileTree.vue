@@ -10,6 +10,7 @@ const {
   externalRoots,
   contextMenu,
   dragOverPath,
+  dragging,
   menuCanNewFile,
   menuCanNewFolder,
   menuCanRename,
@@ -43,10 +44,17 @@ function moveCurrent() {
   const k = contextMenu.value.rootKind!;
   moveEntryTo(t, k);
 }
+
+// 树区域拖拽兜底:dragging 时一律 preventDefault + dropEffect=move,避免光标全程禁止
+function onTreeDragOver(e: DragEvent) {
+  if (!dragging.value) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+}
 </script>
 
 <template>
-  <div class="file-tree select-none pb-4">
+  <div class="file-tree select-none pb-4" @dragover="onTreeDragOver">
     <!-- 库根(蓝色系) -->
     <div
       v-if="libraryRoot"

@@ -15,6 +15,9 @@ const arrow = computed(() => (props.entry.is_dir ? (props.entry.is_open ? "▾" 
 const canDrag = computed(
   () => !(props.root.kind === "external" && props.entry.is_dir),
 );
+const draggingSelf = computed(
+  () => !!ws.dragging.value && ws.dragging.value.entry.path === props.entry.path,
+);
 
 function toggle() {
   if (props.entry.is_dir) props.entry.is_open = !props.entry.is_open;
@@ -61,7 +64,8 @@ function onDrop(e: DragEvent) {
   <div>
     <div
       class="flex items-stretch cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-sm"
-      :class="{ 'bg-blue-100 dark:bg-blue-900/40': isDragOver }"
+      :class="{ 'bg-blue-100 dark:bg-blue-900/40': isDragOver, 'opacity-50': draggingSelf }"
+      draggable="true"
       @click="onClick"
       @contextmenu="onContextmenu"
       @dragstart="onDragstart"

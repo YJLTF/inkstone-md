@@ -587,6 +587,7 @@ export function useWorkspace(deps: {
     if (!target.is_dir) return;
     if (!isValidDrop(dragging.value.entry, target.path)) return;
     event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     dragOverPath.value = target.path;
   }
 
@@ -613,6 +614,7 @@ export function useWorkspace(deps: {
     if (!dragging.value) return;
     if (!isValidDrop(dragging.value.entry, dirPath)) return;
     event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     dragOverPath.value = dirPath;
   }
 
