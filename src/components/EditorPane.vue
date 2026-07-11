@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref, onUnmounted } from 'vue';
+
 defineProps<{
   content: string;
   renderedHtml: string;
@@ -11,6 +13,42 @@ defineEmits<{
   keydown: [e: KeyboardEvent];
   paste: [e: ClipboardEvent];
 }>();
+
+const splitRatio = ref(Number(localStorage.getItem('splitRatio')) || 50);
+const isDragging = ref(false);
+const splitContainer = ref<HTMLElement | null>(null);
+
+function startSplitResize(e: MouseEvent) {
+  e.preventDefault();
+  isDragging.value = true;
+  document.body.style.cursor = 'ew-resize';
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', doSplitResize);
+  document.addEventListener('mouseup', stopSplitResize);
+}
+
+function doSplitResize(e: MouseEvent) {
+  if (!isDragging.value || !splitContainer.value) return;
+  const rect = splitContainer.value.getBoundingClientRect();
+  const ratio = ((e.clientX - rect.left) / rect.width) * 100;
+  splitRatio.value = Math.max(15, Math.min(85, ratio));
+}
+
+function stopSplitResize() {
+  if (isDragging.value) {
+    localStorage.setItem('splitRatio', String(splitRatio.value));
+  }
+  isDragging.value = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  document.removeEventListener('mousemove', doSplitResize);
+  document.removeEventListener('mouseup', stopSplitResize);
+}
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', doSplitResize);
+  document.removeEventListener('mouseup', stopSplitResize);
+});
 </script>
 
 <template>
@@ -33,8 +71,8 @@ defineEmits<{
     </div>
 
     <!-- 分栏模式 -->
-    <div v-show="showSplit" class="w-full h-full flex">
-      <div class="w-1/2 h-full border-r dark:border-gray-700">
+    <div v-show="showSplit" ref="splitContainer" class="w-full h-full flex">
+      <div :style="{ width: splitRatio + '%' }" class="h-full overflow-hidden">
         <textarea
           :value="content"
           @input="$emit('input', $event)"
@@ -44,7 +82,12 @@ defineEmits<{
           placeholder="开始写作..."
         ></textarea>
       </div>
-      <div class="w-1/2 h-full overflow-y-auto preview-area bg-white dark:bg-gray-900">
+      <div
+        class="split-divider"
+        :class="{ active: isDragging }"
+        @mousedown="startSplitResize"
+      ></div>
+      <div :style="{ width: (100 - splitRatio) + '%' }" class="h-full overflow-y-auto preview-area bg-white dark:bg-gray-900">
         <div class="markdown-body" v-html="renderedHtml"></div>
       </div>
     </div>
@@ -79,10 +122,54 @@ defineEmits<{
   box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5);
 }
 .preview-area {
-  border-left: 1px solid #e5e5e5;
+  border-left: 1px solid transparent;
 }
 .dark .preview-area {
-  border-color: #374151;
+  border-color: transparent;
+}
+
+/* 分栏拖拽分隔条 */
+.split-divider {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  background: #e5e7eb;
+  position: relative;
+  transition: background 150ms ease;
+}
+.split-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px;
+  height: 32px;
+  border-radius: 2px;
+  background: #cbd5e1;
+  transition: background 150ms ease;
+}
+.split-divider:hover,
+.split-divider.active {
+  background: #bfdbfe;
+}
+.split-divider:hover::after,
+.split-divider.active::after {
+  background: #3b82f6;
+}
+.dark .split-divider {
+  background: #374151;
+}
+.dark .split-divider::after {
+  background: #6b7280;
+}
+.dark .split-divider:hover,
+.dark .split-divider.active {
+  background: #1e3a5f;
+}
+.dark .split-divider:hover::after,
+.dark .split-divider.active::after {
+  background: #60a5fa;
 }
 
 /* Mermaid diagram */
