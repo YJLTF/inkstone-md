@@ -509,6 +509,7 @@ pub fn run() {
                     &MenuItem::with_id(app, "split", "分栏视图", true, None::<&str>)?,
                     &MenuItem::with_id(app, "preview", "预览模式", true, None::<&str>)?,
                     &MenuItem::with_id(app, "dark", "深色主题", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "preferences", "阅读偏好\tCtrl+,", true, None::<&str>)?,
                 ],
             )?;
 

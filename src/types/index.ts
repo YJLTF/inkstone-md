@@ -70,8 +70,3 @@ export interface TreeRoot {
   invalid?: boolean;
   is_open?: boolean;
 }
-
-export interface AppConfig {
-  libraryPath: string;
-  recentFolders: string[];
-}

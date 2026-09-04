@@ -8,7 +8,7 @@ import {
   Image, Link, Sigma, Code2, Table, ListTree,
   FileCode, Printer,
   Columns2, Eye, Pencil,
-  Sun, Moon, MoreHorizontal, Feather,
+  Sun, Moon, MoreHorizontal, Feather, Settings,
 } from '@lucide/vue';
 import type { ViewMode, ThemeName, ThemeOption } from '../types';
 
@@ -35,6 +35,7 @@ defineEmits<{
   'set-view-mode': [mode: ViewMode];
   'set-theme': [name: ThemeName];
   'toggle-dark': [];
+  'open-settings': [];
 }>();
 
 const toolbarRef = ref<HTMLElement | null>(null);
@@ -50,17 +51,22 @@ function updateOverflow() {
 
 let ro: ResizeObserver | null = null;
 
+function closeOverflowMenu() {
+  overflowMenuOpen.value = false;
+}
+
 onMounted(() => {
   if (toolbarRef.value) {
     updateOverflow();
     ro = new ResizeObserver(() => updateOverflow());
     ro.observe(toolbarRef.value);
   }
-  document.addEventListener('click', () => { overflowMenuOpen.value = false; });
+  document.addEventListener('click', closeOverflowMenu);
 });
 
 onUnmounted(() => {
   ro?.disconnect();
+  document.removeEventListener('click', closeOverflowMenu);
 });
 </script>
 
@@ -258,6 +264,13 @@ onUnmounted(() => {
       >
         <Sun v-if="isDark" :size="16" class="theme-toggle-icon" />
         <Moon v-else :size="16" class="theme-toggle-icon" />
+      </button>
+      <button
+        @click="$emit('open-settings')"
+        class="toolbar-btn"
+        title="阅读偏好 (Ctrl+,)"
+      >
+        <Settings :size="16" />
       </button>
     </div>
   </div>
