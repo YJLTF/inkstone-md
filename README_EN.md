@@ -2,6 +2,8 @@
 
 [中文](./README.md) | English
 
+> **Note:** This English translation lags behind the Chinese README (currently at v1.5.0 content). For the latest features and changelog, see [README.md](./README.md) and [CHANGELOG.md](./CHANGELOG.md).
+
 A lightweight and elegant desktop Markdown editor built with Tauri 2 + Vue 3. Out-of-the-box support for live preview, WYSIWYG-style editing, syntax highlighting, math equations, Mermaid diagrams, multiple themes, and OS-level file associations.
 
 ![preview](docs/preview.png)
@@ -186,7 +188,9 @@ inkstone-md/
 │   ├── icons/                 # App icons
 │   ├── Cargo.toml             # Rust dependencies
 │   └── tauri.conf.json        # Tauri config (window, bundle, file association)
-├── ROADMAP_V1.0.0.md          # V1.0.0 release plan and P0/P1 acceptance
+├── docs/roadmaps/             # per-version release plans (V1.0.0 → V1.6.0)
+├── CHANGELOG.md               # version changelog
+├── AGENTS.md                  # development guide
 ├── package.json               # Node dependencies and scripts
 ├── vite.config.ts             # Vite config
 ├── tailwind.config.js         # TailwindCSS config
@@ -214,7 +218,7 @@ inkstone-md/
 
 ### [1.5.0] — dual-zone file tree rebuild
 
-The sidebar file tree is rebuilt as a two-zone model. See [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md).
+The sidebar file tree is rebuilt as a two-zone model. See [ROADMAP_V1.5.0.md](./docs/roadmaps/ROADMAP_V1.5.0.md).
 
 #### ✨ Added
 - **Dual-zone file tree**:
@@ -242,7 +246,7 @@ The sidebar file tree is rebuilt as a two-zone model. See [ROADMAP_V1.5.0.md](./
 
 ### [1.4.0] — architecture cleanup & PDF export fixes
 
-Two tasks: rebuild PDF export and split App.vue into components. See [ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md).
+Two tasks: rebuild PDF export and split App.vue into components. See [ROADMAP_V1.4.0.md](./docs/roadmaps/ROADMAP_V1.4.0.md).
 
 #### 🐛 Fixed
 - **PDF export rebuilt** with a hidden iframe: no more toolbar/sidebar/status-bar leaking into the PDF, long documents are no longer clipped, and the header no longer shows "InkStone MD"
@@ -254,7 +258,7 @@ Two tasks: rebuild PDF export and split App.vue into components. See [ROADMAP_V1
 
 ### [1.3.0] — feature completion & experience fixes
 
-Focused on four reported issues: adding a true edit-only view, fixing the typewriter / focus modes that had no visible effect, and adding Shortcuts & About entries to the native menu bar. See [ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md).
+Focused on four reported issues: adding a true edit-only view, fixing the typewriter / focus modes that had no visible effect, and adding Shortcuts & About entries to the native menu bar. See [ROADMAP_V1.3.0.md](./docs/roadmaps/ROADMAP_V1.3.0.md).
 
 #### ✨ Added
 - **Edit-only view**: toolbar (pencil icon), native menu "View → Edit Mode", and `Ctrl+\` to cycle edit / split / preview; the view mode is persisted across restarts
@@ -273,7 +277,7 @@ Focused on four reported issues: adding a true edit-only view, fixing the typewr
 
 ### [1.1.0] — optimization pass
 
-A pure optimization release, no breaking changes. Focuses on toolbar/UI polish and HTML/PDF export fidelity. See [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md) for details.
+A pure optimization release, no breaking changes. Focuses on toolbar/UI polish and HTML/PDF export fidelity. See [ROADMAP_V1.1.0.md](./docs/roadmaps/ROADMAP_V1.1.0.md) for details.
 
 #### 🎨 UI & toolbar
 - **Toolbar is now icon-only**: switched from emoji + Chinese to Lucide SVG icons (`FilePlus` / `FolderOpen` / `Save` / `Bold` / `Italic` / `Heading1` …), uniform size, inherits theme color
@@ -337,7 +341,7 @@ Earlier development snapshot. Implemented multi-tab, file tree, search & replace
 
 ## Roadmap
 
-V1.x candidates are tracked in [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md) (DOCX export, spell-check, font preferences, etc.), [ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md), [ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md) and [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md) (detailed records of each pass and remaining follow-ups).
+V1.x candidates are tracked in [ROADMAP_V1.0.0.md](./docs/roadmaps/ROADMAP_V1.0.0.md) (DOCX export, spell-check, font preferences, etc.), [ROADMAP_V1.1.0.md](./docs/roadmaps/ROADMAP_V1.1.0.md), [ROADMAP_V1.4.0.md](./docs/roadmaps/ROADMAP_V1.4.0.md) and [ROADMAP_V1.5.0.md](./docs/roadmaps/ROADMAP_V1.5.0.md) (detailed records of each pass and remaining follow-ups).
 
 ## Contributing
 
