@@ -81,7 +81,7 @@ function toTauriAssetUrl(src: string, currentFilePath: string | null): string {
  * 对 markdown 源串中"代码块之外"的部分应用 fn,跳过 fenced(```/~~~)与行内(`)代码,
  * 避免 toc/图片等预处理改写到代码块内部。代码块原样保留。
  */
-function mapOutsideCode(content: string, fn: (s: string) => string): string {
+export function mapOutsideCode(content: string, fn: (s: string) => string): string {
   const store: string[] = [];
   const stash = (m: string) => {
     const i = store.length;
@@ -92,6 +92,17 @@ function mapOutsideCode(content: string, fn: (s: string) => string): string {
   s = s.replace(/`[^`\n]*`/g, stash);
   s = fn(s);
   return s.replace(/\u0000K(\d+)\u0000/g, (_, i) => store[+i]);
+}
+
+/**
+ * 返回去掉 fenced(```/~~~)与行内(`)代码段后的内容(不还原)。
+ * 用于资源扫描等只关心"真实文档内容"的场景——文档里反引号包裹的
+ * `![](demo.mp4)` 这类语法示例不应被当作真实资源引用。
+ */
+export function stripCodeSegments(content: string): string {
+  return content
+    .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, "\n")
+    .replace(/`[^`\n]*`/g, " ");
 }
 
 /**

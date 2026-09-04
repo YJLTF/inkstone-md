@@ -111,7 +111,7 @@ Uncaught ReferenceError: Cannot access 'X' before initialization
 
 - 安装器 `installMode: "perMachine"` 需要管理员权限,但这是双击 .md 文件关联能稳定生效的前提(Win 10 HKCU 关联优先级有坑)
 - 路径混用:`std::path::Path` 拿到的是 `\`,但 Tauri 内部要 `/`,传 `convertFileSrc` / 写 `asset://` 之前记得 `.replace(/\\/g, '/')`
-- `reveal_in_folder`:目录直接 `explorer <dir>` 打开内容,文件用 `explorer /select,<path>` 定位;**不要**手工加引号 — Rust 的 `Command::arg` 会自动处理含空格的路径
+- `reveal_in_folder`:目录 `explorer "<dir>"` 打开内容,文件用 `/select,"<path>"` 定位;**必须用 `raw_arg` 手工控制引号**——`Command::arg` 会对含空格参数整体加引号,而 explorer 的 `/select` 不接受整体引号,路径带空格时打开失败(表现为回落到"文档"文件夹)
 - `vue-tsc` 报 `:deep` 警告(`lightningcss minify 'deep' is not a valid pseudo-class`)是 Vue scoped CSS 已知噪音,不影响构建
 
 ## 发布参考

@@ -285,10 +285,17 @@ fn reveal_in_folder(path: &str) -> Result<(), String> {
     let is_dir = p.is_dir();
     #[cfg(target_os = "windows")]
     {
-        // 目录:直接打开该目录;文件:explorer /select,<path> 聚焦到该文件
-        let arg = if is_dir { path.to_string() } else { format!("/select,{}", path) };
+        use std::os::windows::process::CommandExt;
+        // explorer 的 /select 解析不接受"整个参数被引号包住"的形式,而 Command::arg
+        // 恰好会对含空格的参数整体加引号 → 路径带空格时打开失败。
+        // 必须用 raw_arg 精确控制引号:目录 → explorer "<dir>";文件 → /select,"<file>"
+        let arg = if is_dir {
+            format!("\"{}\"", path)
+        } else {
+            format!("/select,\"{}\"", path)
+        };
         std::process::Command::new("explorer")
-            .arg(arg)
+            .raw_arg(arg)
             .spawn()
             .map_err(|e| format!("explorer 启动失败: {}", e))?;
     }

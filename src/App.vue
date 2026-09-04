@@ -8,7 +8,7 @@ import { FolderTree, ListTree, Clock, Image as ImageIcon } from '@lucide/vue';
 
 import type { Tab, Heading, ThemeName, ViewMode, DocumentAsset, ImageAlign, SidebarMode } from './types';
 import { isAbsolutePath, posixNormalize, slugify, formatBytes, getFileName } from './utils';
-import { extractFrontMatter, renderFrontMatterCard, preprocessImageSrcs, preprocessToc, renderMarkdownHTML, findTableRanges } from './utils/markdown';
+import { extractFrontMatter, renderFrontMatterCard, preprocessImageSrcs, preprocessToc, renderMarkdownHTML, findTableRanges, stripCodeSegments } from './utils/markdown';
 import ShortcutsModal from './components/ShortcutsModal.vue';
 import AboutModal from './components/AboutModal.vue';
 import PrintHint from './components/PrintHint.vue';
@@ -170,7 +170,8 @@ const assetExistsCache = new Map<string, boolean>();
 
 const documentAssets = computed<DocumentAsset[]>(() => {
   if (!activeTab.value) return [];
-  const content = activeTab.value.content;
+  // 跳过 fenced/行内代码段:文档里反引号包裹的 `![](demo.mp4)` 等语法示例不是真实引用
+  const content = stripCodeSegments(activeTab.value.content);
   const seen = new Set<string>();
   const list: DocumentAsset[] = [];
   const re = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
