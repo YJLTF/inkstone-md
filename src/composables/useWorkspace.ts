@@ -96,10 +96,6 @@ export function useWorkspace(deps: {
     }
   }
 
-  async function reloadRoot(root: TreeRoot) {
-    await loadRoot(root);
-  }
-
   async function reloadPath(path: string) {
     const r = rootOfPath(path);
     if (r) await loadRoot(r);
@@ -626,31 +622,26 @@ export function useWorkspace(deps: {
     await moveEntry(d.entry, d.rootKind, dirPath);
   }
 
+  // 仅导出外部(App.vue / TheFileTree / TreeNode)实际消费的成员;
+  // 内部协作方法(moveEntry/ensureLibrary/remap* 等)保持私有
   return {
     openFile: (path: string) => deps.openFile(path),
-    roots,
     libraryRoot,
     externalRoots,
     contextMenu,
     renaming,
     dragging,
     dragOverPath,
-    menuInLibrary,
-    menuTargetIsFolder,
     menuCanNewFile,
     menuCanNewFolder,
     menuCanRename,
     menuCanDelete,
     menuCanMove,
     init,
-    ensureLibrary,
     reloadLibrary,
     migrateLibrary,
-    addExternalRoot,
     openExternalFolder,
-    closeExternalRoot,
     removeRecentFolder,
-    reloadRoot,
     reloadPath,
     showContextMenu,
     showContextMenuOnTree,
@@ -661,7 +652,6 @@ export function useWorkspace(deps: {
     confirmRename,
     cancelRename,
     handleDelete,
-    moveEntry,
     moveEntryTo,
     onDragStart,
     onNodeDragOver,
@@ -670,9 +660,6 @@ export function useWorkspace(deps: {
     onDragEnd,
     onContainerDragOver,
     onContainerDrop,
-    remapTabPath,
-    remapTabsUnderDir,
-    closeTabsUnderPath,
   };
 }
 

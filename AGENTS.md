@@ -1,6 +1,6 @@
 # AGENTS.md
 
-> InkStone MD 是一个 Tauri 2.x + Vue 3 桌面 Markdown 编辑器,目前主版本 1.5.0。视图层已拆分为 `src/components/` 下多个 SFC 组件(工具栏/Tab/编辑器/文件树/对话框等),文件树逻辑抽到 `src/composables/useWorkspace.ts`;编辑器、Markdown 渲染、导出等核心仍保留在 `src/App.vue`(约 2700 行)。
+> InkStone MD 是一个 Tauri 2.x + Vue 3 桌面 Markdown 编辑器,目前主版本 1.6.0。视图层已拆分为 `src/components/` 下多个 SFC 组件(工具栏/Tab/编辑器/文件树/对话框/设置面板/灯箱等);文件树逻辑在 `src/composables/useWorkspace.ts`,导出/打印管线在 `src/composables/useExport.ts`,Markdown 渲染管线在 `src/utils/markdown.ts`;`src/App.vue`(~2100 行)保留 tab 管理、快捷键、事件编排与预览交互绑定。
 
 ## 命令速查
 
@@ -70,6 +70,29 @@ npm run preview          # 预览 dist/
 3. `tauri.conf.json` 必须有 `app.security.assetProtocol: { enable: true, scope: ["**"] }`
 4. `Cargo.toml` 的 `tauri` feature 必须含 `protocol-asset`
 5. `capabilities/default.json` 需要 `fs:allow-read-file` 的 `**` scope 兜底
+
+### 预览样式体系(V1.6.0 起)
+
+- **唯一真源**:`src/assets/markdown-body.css` 承载全部 `.markdown-body` 预览内容样式。预览由 `main.ts` 正常 import;导出 HTML/PDF 由 `useExport.ts` 以 `?raw` 内联。**改预览样式只改这一个文件**(`constants/exportCss.ts` 只有 `EXPORT_SHELL_CSS` 外壳与 `PRINT_CSS` 打印分页),不要再手工复制 markdown 样式进去。全局滚动条样式在 `style.css`(必须全局,scoped 选择器命中不了子组件的滚动容器)。
+- **主题 = CSS 变量**:全部颜色走 `--ink-md-*` 变量,`:root` 浅色基线、`.dark` 暗色基线、`[data-theme=...]` 块只覆写变量值。新增主题只需加变量块,不要写元素级颜色覆盖。
+- **阅读偏好(字体/字号/行宽/高亮主题)**通过在 `<html>` 上**内联 style 写同名变量**实现用户级覆盖(同元素内联必胜主题规则);"跟随主题"档不写内联属性。持久化在 localStorage(`readerFont`/`readerFontSize`/`readerWidth`/`hljsTheme`);导出时 `captureCurrentTheme` 用 `getComputedStyle(document.documentElement)` 直接读实时生效值注入产物(**不要**在 JS 里手抄主题色表,会和 CSS 漂移)。
+- **代码高亮**:hljs 走 `highlight.js/lib/common`(类型垫片在 `src/types/hljs-common.d.ts`);预览配色由 `<style id="ink-hljs-theme">` 动态注入(`applyHljsTheme`),`auto` 档跟随亮暗。CSS 与选项表在 `constants/options.ts`(`getHljsThemeCss`)。不要恢复静态 `import "highlight.js/styles/xxx.css"`。
+- **front-matter / 音视频**:都在 `utils/markdown.ts` 管线里(`extractFrontMatter`/`embedMediaTags`);front-matter 元信息卡内部禁用 h1-h6(会破坏 `addHeadingIds` 的顺序对齐)。
+
+### Markdown 渲染管线(V1.6.0 优化后,单源)
+
+`src/utils/markdown.ts` 导出 `md` 实例与整条纯函数管线,**预览与导出共用**:
+
+- 预览(App.vue `renderedHTML`):`extractFrontMatter` → `preprocessImageSrcs` → `preprocessToc` → `renderMarkdownHTML(pre2, headings, { interactive: true })`
+- 导出/打印(useExport):`inlineImagesInMarkdown` → `extractFrontMatter` → `preprocessToc` → `renderMarkdownHTML(source, headings, { mermaidFallback: true })`
+
+`renderMarkdownHTML` 内部固定顺序:md.render → mermaid 占位 → KaTeX(暂存 `<pre>/<code>` 防公式正则穿透)→ `addHeadingIds` → `embedMediaTags` → (interactive 时)图片/代码块/表格交互包装。**新增渲染步骤只改这一处**,不要再在预览、导出两条链上各写一份(1.5.0 前的教训:两份副本已漂移出导出锚点失效 bug)。DOM 交互绑定(bindXxxToolbar/bindImageLightbox/bindHeadingAnchors 等依赖 App 状态的函数)留在 App.vue。
+
+### 前端陷阱补充
+
+- **textarea 选区不触发 document 级 `selectionchange`**(WebView2/部分 Chromium):统计"选中 N 字"必须挂 textarea **元素级** `selectionchange` 事件(见 App.vue onMounted);document 级监听只负责把非编辑器选区清零。
+- **滚动同步锁必须单定时器可取消**:程序化滚动会触发对方窗格的回声 scroll 事件,靠 `holdSyncLock` 互斥;若每次同步 `setTimeout` 新起定时器不清旧的,连续滚动时旧定时器提前解锁,双向回写抖动。
+- **mermaid 已渲染图按 `主题|源码` 跳过**(`data-rendered` 属性):主题切换需换 key 重渲染,否则切深浅色图表不换肤。
 
 ## Vue 3 组合式 API 关键陷阱
 

@@ -3,12 +3,26 @@ import { X } from '@lucide/vue';
 
 defineProps<{
   modelValue: boolean;
-  shortcuts: { group: string; key: string; desc: string }[];
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
 }>();
+
+// 快捷键清单(单一数据源,README 的快捷键表与此对照)
+const SHORTCUTS: { group: string; key: string; desc: string }[] = [
+  { group: '文件', key: 'Ctrl+N', desc: '新建文件' },
+  { group: '文件', key: 'Ctrl+O', desc: '打开文件' },
+  { group: '文件', key: 'Ctrl+S', desc: '保存文件' },
+  { group: '文件', key: 'Ctrl+Shift+S', desc: '另存为' },
+  { group: '编辑', key: 'Ctrl+F', desc: '搜索替换' },
+  { group: '编辑', key: 'Ctrl+Z / Ctrl+Y', desc: '撤销 / 重做' },
+  { group: '视图', key: 'Ctrl+B', desc: '切换侧边栏' },
+  { group: '视图', key: 'Ctrl+\\', desc: '循环切换 编辑/分栏/预览' },
+  { group: '视图', key: 'F7', desc: '切换滚动同步' },
+  { group: '帮助', key: 'F1', desc: '快捷键说明' },
+  { group: '其他', key: 'Esc', desc: '关闭搜索/对话框' },
+];
 </script>
 
 <template>
@@ -30,7 +44,7 @@ const emit = defineEmits<{
             <tr><th>分组</th><th>快捷键</th><th>功能</th></tr>
           </thead>
           <tbody>
-            <tr v-for="(s, i) in shortcuts" :key="i">
+            <tr v-for="(s, i) in SHORTCUTS" :key="i">
               <td class="text-gray-500 dark:text-gray-400">{{ s.group }}</td>
               <td><code>{{ s.key }}</code></td>
               <td>{{ s.desc }}</td>

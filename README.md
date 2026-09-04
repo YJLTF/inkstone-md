@@ -11,20 +11,26 @@
 ### 内容创作
 
 - **多模式实时预览**:分栏 / 纯编辑 / 纯预览
-- **代码块**:highlight.js 100+ 语言高亮 + 行号显示 + 一键复制到剪贴板
+- **代码块**:highlight.js 常用语言高亮 + 行号显示 + 一键复制到剪贴板,亮暗模式自动切换配色
 - **数学公式**:KaTeX 渲染(行内 `$...$` 与块级 `$$...$$`)
 - **Mermaid 图表**:流程图、时序图、甘特图、类图、状态图等
+- **GitHub 提示块**:`> [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]` 渲染为带图标彩色提示卡
+- **行内扩展**:`==高亮标记==`、`^上标^`、`~下标~`、`~~删除线~~`
+- **Front-matter 元信息卡**:文件头 YAML(标题/作者/日期/标签等)渲染为文档顶部元信息卡
+- **音视频嵌入**:`![](demo.mp4)` / `![](bgm.mp3)` 内联渲染为原生播放器
 - **任务列表、脚注**:`- [x] 任务` 与 `[^1]` 标准语法
 - **搜索替换**:`Ctrl+F`,支持正则转义、上一条/下一条、替换/全部替换
 - **自动配对**:输入 `(`/`[`/`{`/`"` 等自动补全另一半
 - **粘贴图片**:剪贴板截图自动落盘到 `<file>/assets/`,以相对引用插入
-- **图片交互**:预览区 hover 浮出工具栏,支持 25% / 50% / 75% / 100% 缩放 + 左/中/右对齐
+- **图片交互**:预览区 hover 浮出工具栏,支持 25% / 50% / 75% / 100% 缩放 + 左/中/右对齐;点击图片打开灯箱(滚轮缩放、Esc 关闭);`![alt](src "title")` 的 title 渲染为图注
 - **表格可视化编辑**:点击 `✏️ 编辑` 切换可编辑模式,± 行 / ± 列,`💾 保存到源` 一键写回原 markdown
 - **目录插入**:在任意位置写 `[[toc]]` 自动展开为基于标题的多级目录,点击跳转
+- **标题锚点**:hover 标题浮现 `#`,点击复制锚点链接
 
 ### 视图与导航
 
 - **大纲 / TOC 侧边栏**:点击同步跳转编辑器 + 预览区,当前标题高亮跟随滚动
+- **阅读进度条**:预览区顶部细进度条跟随滚动
 - **编辑/预览滚动同步**:分栏模式下双向滚动比例同步,状态栏开关 + `F7` 快捷键切换,默认开启
 - **双区文件树侧边栏**:
   - 📚 **我的库**:应用内工作区,默认根节点开箱即用,支持文件/文件夹的完整 新建/重命名/删除/移动,可一键「迁移库」到任意位置(含已开文档路径重映射)
@@ -52,6 +58,7 @@
 
 - **4 套内置主题**:`InkStone` / `GitHub` / `One Dark` / `Typora`
 - **深色 / 浅色双模式**(One Dark 强制深色)
+- **阅读偏好设置**(`Ctrl+,`):正文字体(无衬线/衬线)、字号五档、内容行宽三档、代码高亮主题(自动 + 7 款),即换即生效、持久化保留,导出 HTML/PDF 同步使用
 - 主题与模式均持久化到 `localStorage`
 - 工具栏下拉切换,即时预览
 
@@ -66,6 +73,7 @@
 | `Ctrl+B` | 切换侧边栏 |
 | `Ctrl+F` | 搜索替换 |
 | `Ctrl+\` | 循环切换 编辑 / 分栏 / 预览 视图 |
+| `Ctrl+,` | 阅读偏好设置 |
 | `F1` | 快捷键说明 |
 | `F7` | 切换滚动同步 |
 | `Esc` | 关闭搜索面板 / 对话框 |
@@ -94,7 +102,7 @@ npm run tauri build        # 打包出 NSIS 安装包(.exe)
 `npm run tauri build` 完成后,安装包位于:
 
 ```
-src-tauri/target/release/bundle/nsis/InkStone MD_1.5.0_x64-setup.exe
+src-tauri/target/release/bundle/nsis/InkStone MD_1.6.0_x64-setup.exe
 ```
 
 双击安装即可,Windows 会自动注册 `.md` / `.markdown` / `.txt` 文件关联。
@@ -155,8 +163,8 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.5.0_x64-setup.exe
 
 - **前端**:Vue 3 + TypeScript + Vite + TailwindCSS
 - **后端**:Tauri 2.x(Rust)
-- **Markdown 解析**:markdown-it + markdown-it-task-lists + markdown-it-footnote
-- **代码高亮**:highlight.js
+- **Markdown 解析**:markdown-it + markdown-it-task-lists + markdown-it-footnote + markdown-it-github-alerts + markdown-it-mark / sub / sup
+- **代码高亮**:highlight.js(lib/common 按需加载,7 款可切换主题)
 - **数学公式**:KaTeX
 - **图表**:mermaid
 - **UI 图标**:`@lucide/vue`(纯 SVG,随主题变色)
@@ -167,14 +175,15 @@ src-tauri/target/release/bundle/nsis/InkStone MD_1.5.0_x64-setup.exe
 ```
 inkstone-md/
 ├── src/                       # Vue 前端源码
-│   ├── App.vue                # 主组件(布局壳 + 编辑器/导出/快捷键编排)
+│   ├── App.vue                # 主组件(tab/快捷键/事件编排 + 预览交互绑定)
 │   ├── main.ts                # Vue 入口
-│   ├── style.css              # 全局样式 + 4 套主题
-│   ├── components/            # SFC 组件(工具栏/Tab/编辑器/文件树/对话框…)
-│   ├── composables/           # 组合式逻辑(useWorkspace 双区文件树…)
+│   ├── style.css              # 应用外壳样式(含全局滚动条)
+│   ├── assets/                # 预览内容样式(markdown-body.css 单一真源)
+│   ├── components/            # SFC 组件(工具栏/Tab/编辑器/文件树/设置面板/灯箱/对话框…)
+│   ├── composables/           # 组合式逻辑(useWorkspace 双区文件树 / useExport 导出打印)
 │   ├── types/                 # TypeScript 类型声明
-│   ├── utils.ts               # 纯工具函数
-│   └── constants/             # 常量(导出 CSS 等)
+│   ├── utils/                 # 纯逻辑(utils.ts 工具函数 / markdown.ts 渲染管线)
+│   └── constants/             # 常量(主题与高亮选项 / 欢迎文档 / 导出 CSS)
 ├── src-tauri/                 # Tauri 后端
 │   ├── src/
 │   │   ├── lib.rs             # Rust 库入口(命令、单实例、文件打开)
@@ -209,6 +218,50 @@ inkstone-md/
 | `frontend_ready` | 前端握手,触发启动挂起文件的派发 |
 
 ## 版本记录
+
+### [1.6.0] - 预览全面增强美化
+
+对预览页做一次全面增强:样式基建(CSS 变量化 + 预览/导出单源化)、四项语法扩展、全元素视觉精修、阅读偏好设置面板、图片灯箱与阅读进度条。详见 [ROADMAP_V1.6.0.md](./ROADMAP_V1.6.0.md)。
+
+#### ✨ 新增
+- **语法扩展**:
+  - GitHub 提示块:`> [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]` 渲染为带图标彩色提示卡,亮暗主题各一版配色
+  - 行内三件套:`==高亮标记==`、`^上标^`、`~下标~`
+  - Front-matter 元信息卡:文件头 YAML 渲染为文档顶部元信息卡(标题强调 + 标签 chips + 键值行)
+  - 音视频嵌入:`![](demo.mp4)` / `![](bgm.mp3)` 内联渲染为原生播放器
+- **阅读偏好设置面板**(`Ctrl+,` / 工具栏齿轮 / 原生菜单):正文字体、字号五档、内容行宽三档、代码高亮主题 8 选 1;即换即生效、持久化保留,导出 HTML/PDF 同步使用
+- **图片灯箱**:点击预览图片全屏查看,滚轮/按钮缩放(20%–500%),Esc / 点击遮罩关闭
+- **标题锚点**:hover 标题浮现 `#`,点击复制 `#slug` 锚点链接
+- **图注**:语法 `![alt](src "title")` 的 title 渲染为图片下方图注
+- **阅读进度条**:预览区顶部跟随滚动的细进度条
+- 补齐 `kbd` 键帽、`details/summary` 折叠块、脚注回链等元素样式
+
+#### 🎨 视觉美化
+- 标题层级精修:h1 改主题强调色短下划线,h2 细分隔线,层级字号统一节奏
+- 引用块 / 表格 / 图片圆角与阴影统一精修,全部跟随主题强调色
+- 代码块容器升级:圆角 10px + 语言徽标 + 顶栏一体化,行号栏视觉分离
+- 四套主题(InkStone / GitHub / One Dark / Typora)统一受益于新变量体系
+
+#### 🏗️ 重构
+- **预览样式 CSS 变量化**:全部颜色抽为 `--ink-md-*` 变量,`:root` 浅色基线 + `.dark` 暗色基线 + 各主题只覆写变量值
+- **预览/导出样式单源化**:新建 `src/assets/markdown-body.css` 作为唯一真源,导出以 `?raw` 内联,删除 `EXPORT_BASE_CSS` 手工副本,不再漂移
+- **hljs 按需加载**:全量导入改 `highlight.js/lib/common`(常用语言),预览代码高亮主题动态注入、亮暗自适应,修复亮色模式代码 token 暗色配色错配
+- 预览交互元素样式(`ink-codeblock` / `ink-table` / 图片工具栏 / TOC)从 EditorPane `:deep` 迁入全局并变量化(顺带修复 `.dark :deep()` 选择器永不匹配导致暗色变体失效的问题)
+- 输入防抖渲染:击键 250ms 内合并全量重渲染(切换 tab 立即同步),长文档打字更流畅
+- 卸载死依赖 `html2canvas` / `jspdf`
+- 三处 version 同步到 `1.6.0`
+
+#### 🐛 修复
+- **导出物 TOC / 锚点全部失效**:导出渲染管线补调 `addHeadingIds`,导出 HTML/PDF 中目录与锚点链接恢复跳转
+- **分栏滚动同步抖动**:同步锁的解锁定时器每次新起未取消,连续滚动时提前解锁造成双向回写;改为全局唯一可重置定时器
+- **阅读进度条遮挡正文**:由滚动容器内 sticky 悬浮改为预览面板顶部独立布局条,内容零遮挡
+- **"选中 N 字"统计错位**:WebView2 中 textarea 选区不触发 document 级 `selectionchange`,旧实现只统计到编辑器外的选区(如标签栏文字);改挂 textarea 元素级事件,编辑器内精确计数、外部选区一律不计
+
+#### ⚡ 性能与代码质量(1.6.0 收尾)
+- **渲染管线单源化**:预览与导出的 mermaid/KaTeX/锚点/媒体后处理合并为 `utils/markdown.ts` 的同一条 `renderMarkdownHTML` 管线,删除两份漂移副本;导出主题色改 `getComputedStyle` 读实时值,删除手抄色表
+- **导出/打印抽离 `useExport.ts`**,两处重复的 HTML head + mermaid 初始化脚本合并;快捷键清单内聚进 `ShortcutsModal`
+- **性能**:大纲/词数改读 250ms 防抖副本(不再每次击键全量扫描)、搜索防抖、mermaid 按「主题+源码」增量渲染跳过未变更图
+- 清理死代码:AppConfig 类型、useWorkspace 12 个无消费导出、`PRINT_CSS` 旧结构选择器、失效 favicon、永不匹配的 scoped katex/滚动条样式(`katex-error` 样式顺势补进 markdown-body.css,此前公式报错实际无样式)
 
 ### [1.5.0] - 双区文件树重构
 
@@ -370,7 +423,7 @@ inkstone-md/
 
 ## 路线图
 
-V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)、[ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)、[ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)、[ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md) 与 [ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md)(各期优化的详细记录与剩余工作项)。
+V1.x 候选特性见 [ROADMAP_V1.0.0.md](./ROADMAP_V1.0.0.md)(含 DOCX 导出、拼写检查、字体偏好等)、[ROADMAP_V1.1.0.md](./ROADMAP_V1.1.0.md)、[ROADMAP_V1.2.0.md](./ROADMAP_V1.2.0.md)、[ROADMAP_V1.3.0.md](./ROADMAP_V1.3.0.md)、[ROADMAP_V1.4.0.md](./ROADMAP_V1.4.0.md)、[ROADMAP_V1.5.0.md](./ROADMAP_V1.5.0.md) 与 [ROADMAP_V1.6.0.md](./ROADMAP_V1.6.0.md)(各期优化的详细记录与剩余工作项)。
 
 ## 贡献
 

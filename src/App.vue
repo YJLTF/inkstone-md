@@ -1,26 +1,19 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick, provide } from "vue";
-import MarkdownIt from "markdown-it";
-import mk from "markdown-it-task-lists";
-import footnote from "markdown-it-footnote";
-import hljs from "highlight.js";
-import katex from "katex";
 import mermaid from "mermaid";
-import "katex/dist/katex.min.css";
-import "highlight.js/styles/github-dark.css";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import katexCss from "katex/dist/katex.min.css?raw";
-import hljsLightCss from "highlight.js/styles/github.css?raw";
-import hljsDarkCss from "highlight.js/styles/github-dark.css?raw";
-import mermaidJs from "mermaid/dist/mermaid.min.js?raw";
+import { FolderTree, ListTree, Clock, Image as ImageIcon } from '@lucide/vue';
 
-import type { Tab, Heading, ThemeName, ViewMode, DocumentAsset, ImageAlign, SidebarMode, ThemeOption } from './types';
-import { isAbsolutePath, posixNormalize, slugify, escapeHtml, formatBytes, getFileName, getMimeFromExt, bytesToBase64, fetchAsDataUri } from './utils';
+import type { Tab, Heading, ThemeName, ViewMode, DocumentAsset, ImageAlign, SidebarMode } from './types';
+import { isAbsolutePath, posixNormalize, slugify, formatBytes, getFileName } from './utils';
+import { extractFrontMatter, renderFrontMatterCard, preprocessImageSrcs, preprocessToc, renderMarkdownHTML, findTableRanges } from './utils/markdown';
 import ShortcutsModal from './components/ShortcutsModal.vue';
 import AboutModal from './components/AboutModal.vue';
 import PrintHint from './components/PrintHint.vue';
+import SettingsModal from './components/SettingsModal.vue';
+import Lightbox from './components/Lightbox.vue';
 import TheStatusBar from './components/TheStatusBar.vue';
 import SearchPanel from './components/SearchPanel.vue';
 import TheTabBar from './components/TheTabBar.vue';
@@ -28,67 +21,10 @@ import TheToolbar from './components/TheToolbar.vue';
 import EditorPane from './components/EditorPane.vue';
 import TheFileTree from './components/TheFileTree.vue';
 import { useWorkspace, workspaceKey } from './composables/useWorkspace';
-import { EXPORT_BASE_CSS, PRINT_CSS } from './constants/exportCss';
+import { useExport } from './composables/useExport';
+import { THEME_OPTIONS, HLJS_THEME_OPTIONS, FONT_STACKS, getHljsThemeCss } from './constants/options';
+import { defaultContent } from './constants/defaultContent';
 
-const md = new MarkdownIt({
-  html: true,
-  linkify: true,
-  typographer: true,
-  highlight: (str, lang) => {
-    // 用 <div class="line"> 把每行包起来,这样 CSS 能让行号与代码行一一对齐。
-    const wrap = (s: string) =>
-      s
-        .split("\n")
-        .map((line) => `<div class="line">${line || " "}</div>`)
-        .join("");
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return wrap(hljs.highlight(str, { language: lang }).value);
-      } catch {}
-    }
-    return wrap(escapeHtml(str));
-  },
-});
-md.use(mk, { enabled: true, label: true });
-md.use(footnote);
-
-const defaultContent = `# 欢迎使用 InkStone MD
-
-> 简洁、高效的 Markdown 编辑器
-
-## 特性
-
-- **所见即所得** - 输入即渲染
-- **实时预览** - 分栏同步查看
-- **轻量级** - Tauri + Vue 构建
-
-## 代码示例
-
-\`\`\`javascript
-function hello() {
-  console.log("Hello, InkStone!");
-}
-\`\`\`
-
-## 数学公式
-
-行内公式: $E = mc^2$
-
-块级公式:
-$$
-\\sum_{i=1}^n i = \\frac{n(n+1)}{2}
-$$
-
-## 任务列表
-
-- [x] 安装 InkStone MD
-- [ ] 写一篇文档
-- [ ] 享受写作
-
----
-
-**开始编辑吧！**
-`;
 
 let tabIdCounter = 1;
 const tabs = ref<Tab[]>([{
@@ -105,12 +41,6 @@ const sidebarMode = ref<SidebarMode>('outline');
 const sidebarWidth = ref(280); // 增加默认宽度以容纳按钮
 const isResizing = ref(false);
 const isDark = ref(localStorage.getItem('isDark') === 'true');
-const THEME_OPTIONS: ThemeOption[] = [
-  { value: "inkstone", label: "InkStone" },
-  { value: "github", label: "GitHub" },
-  { value: "onedark", label: "One Dark", forceDark: true },
-  { value: "typora", label: "Typora" },
-];
 const themeName = ref<ThemeName>(
   (localStorage.getItem("themeName") as ThemeName) || "inkstone",
 );
@@ -124,16 +54,58 @@ function setTheme(name: ThemeName) {
     isDark.value = true;
     document.documentElement.classList.add("dark");
     localStorage.setItem("isDark", "true");
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: "dark",
-      securityLevel: "loose",
-      fontFamily: "ui-sans-serif, system-ui, sans-serif",
-    });
-    nextTick(() => renderMermaidDiagrams());
+    reinitMermaid(true);
   }
 }
 const viewMode = ref<ViewMode>((localStorage.getItem('viewMode') as ViewMode) || 'split');
+
+// ========= 代码高亮主题(预览动态注入;auto=跟随亮暗,其余为固定主题) =========
+const hljsTheme = ref<string>(localStorage.getItem("hljsTheme") || "auto");
+
+function applyHljsTheme() {
+  let el = document.getElementById("ink-hljs-theme") as HTMLStyleElement | null;
+  if (!el) {
+    el = document.createElement("style");
+    el.id = "ink-hljs-theme";
+    document.head.appendChild(el);
+  }
+  el.textContent = getHljsThemeCss(hljsTheme.value, isDark.value);
+}
+
+function setHljsTheme(theme: string) {
+  hljsTheme.value = theme;
+  localStorage.setItem("hljsTheme", theme);
+}
+
+watch([hljsTheme, isDark], () => applyHljsTheme(), { immediate: true });
+
+// ========= 阅读偏好(字号/字体/行宽):写 <html> 内联变量,主题变量之上用户级覆盖 =========
+const readerFont = ref(localStorage.getItem("readerFont") || "auto"); // auto | sans | serif
+const readerFontSize = ref(localStorage.getItem("readerFontSize") || "auto"); // auto | 14 | 15 | 16 | 18 | 20
+const readerWidth = ref(localStorage.getItem("readerWidth") || "auto"); // auto | 720 | 820 | 1000
+const showSettings = ref(false);
+// 图片灯箱当前展示的 src(null=关闭)
+const lightboxSrc = ref<string | null>(null);
+
+function applyReaderPrefs() {
+  const el = document.documentElement;
+  const set = (name: string, v: string | null) => {
+    if (v) el.style.setProperty(name, v);
+    else el.style.removeProperty(name);
+  };
+  set("--ink-md-font-family", readerFont.value === "auto" ? null : (FONT_STACKS[readerFont.value] ?? null));
+  set("--ink-md-font-size", readerFontSize.value === "auto" ? null : `${readerFontSize.value}px`);
+  set("--ink-md-max-width", readerWidth.value === "auto" ? null : `${readerWidth.value}px`);
+}
+
+function setReaderPref(kind: "font" | "fontSize" | "width", v: string) {
+  if (kind === "font") { readerFont.value = v; localStorage.setItem("readerFont", v); }
+  else if (kind === "fontSize") { readerFontSize.value = v; localStorage.setItem("readerFontSize", v); }
+  else { readerWidth.value = v; localStorage.setItem("readerWidth", v); }
+}
+
+watch([readerFont, readerFontSize, readerWidth], () => applyReaderPrefs(), { immediate: true });
+
 // 由 viewMode 派生的布尔值,保持模板/下游读取不变(只读,不可直接赋值)
 const showSplit = computed(() => viewMode.value === 'split');
 const showPreview = computed(() => viewMode.value === 'preview');
@@ -145,6 +117,7 @@ function setViewMode(mode: ViewMode) {
 }
 const scrollSync = ref(localStorage.getItem('scrollSync') !== 'false');
 let syncingFrom: 'editor' | 'preview' | null = null;
+let syncingFromTimer: number | null = null;
 const activeHeadingIndex = ref(-1);
 
 // 工作区(双区文件树:应用内库 + 外部文件夹),逻辑全部在 useWorkspace composable
@@ -451,21 +424,6 @@ const showShortcutsModal = ref(false);
 const showAboutModal = ref(false);
 const appVersion = __APP_VERSION__;
 
-// 快捷键清单(单一数据源,对话框与 README 共同参考)
-const SHORTCUTS: { group: string; key: string; desc: string }[] = [
-  { group: '文件', key: 'Ctrl+N', desc: '新建文件' },
-  { group: '文件', key: 'Ctrl+O', desc: '打开文件' },
-  { group: '文件', key: 'Ctrl+S', desc: '保存文件' },
-  { group: '文件', key: 'Ctrl+Shift+S', desc: '另存为' },
-  { group: '编辑', key: 'Ctrl+F', desc: '搜索替换' },
-  { group: '编辑', key: 'Ctrl+Z / Ctrl+Y', desc: '撤销 / 重做' },
-  { group: '视图', key: 'Ctrl+B', desc: '切换侧边栏' },
-  { group: '视图', key: 'Ctrl+\\', desc: '循环切换 编辑/分栏/预览' },
-  { group: '视图', key: 'F7', desc: '切换滚动同步' },
-  { group: '帮助', key: 'F1', desc: '快捷键说明' },
-  { group: '其他', key: 'Esc', desc: '关闭搜索/对话框' },
-];
-
 // 搜索功能状态
 const showSearch = ref(false);
 const searchQuery = ref("");
@@ -480,208 +438,37 @@ const selectedCount = ref(0);
 
 const IMAGE_SCALES = [25, 50, 75, 100] as const;
 
-
-function toTauriAssetUrl(src: string, currentFilePath: string | null): string {
-  if (/^(https?:|data:|blob:|tauri:|asset:)/i.test(src)) return src;
-  let abs: string;
-  if (isAbsolutePath(src)) {
-    abs = posixNormalize(src.replace(/\\/g, "/"));
-  } else {
-    if (!currentFilePath) return src;
-    const dir = currentFilePath.replace(/\\/g, "/").split("/").slice(0, -1).join("/");
-    abs = posixNormalize(dir + "/" + src);
-  }
-  try {
-    return convertFileSrc(abs);
-  } catch {
-    return src;
-  }
-}
-
-/**
- * 在 markdown-it 渲染前,把图片语法里的本地 src 改写为 tauri 资源 URL,
- * 让 webview 通过 assetProtocol 正确加载本地图片。
- * 规则:
- *   - http(s)/data/blob/tauri/asset: 原样保留
- *   - Windows 绝对路径 (C:\...) / UNC / 类 Unix 绝对路径: 规范化后 convertFileSrc
- *   - 相对路径: 相对当前 tab 文件所在目录,convertFileSrc
- *   - 文件未保存: 保留原 src(后续保存后再打开会失效,但不破坏编辑)
- */
-/**
- * 对 markdown 源串中"代码块之外"的部分应用 fn,跳过 fenced(```/~~~)与行内(`)代码,
- * 避免 toc/图片等预处理改写到代码块内部。代码块原样保留。
- */
-function mapOutsideCode(content: string, fn: (s: string) => string): string {
-  const store: string[] = [];
-  const stash = (m: string) => {
-    const i = store.length;
-    store.push(m);
-    return `\u0000K${i}\u0000`;
-  };
-  let s = content.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, stash);
-  s = s.replace(/`[^`\n]*`/g, stash);
-  s = fn(s);
-  return s.replace(/\u0000K(\d+)\u0000/g, (_, i) => store[+i]);
-}
-
-function preprocessImageSrcs(content: string, currentFilePath: string | null): string {
-  return mapOutsideCode(content, (s) =>
-    s.replace(
-      /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
-      (m, alt: string, src: string, _title?: string) => {
-        const newSrc = toTauriAssetUrl(src, currentFilePath);
-        if (newSrc === src) return m;
-        return `![${alt}](${newSrc})`;
-      },
-    ),
-  );
-}
-
-/**
- * 将文本中出现的 `[[toc]]` 标记替换为基于 `headings` 渲染出的目录 HTML。
- * `markdown-it` 配 `html: true` 会把 inline HTML 原样保留,所以我们直接在源字符串
- * 上做替换,然后交给 markdown-it 渲染,这样目录内含的 <ul> 不会被解析成 markdown。
- */
-function preprocessToc(content: string, heads: Heading[]): string {
-  if (!content.includes('[[toc]]')) return content;
-  let repl: string;
-  if (heads.length === 0) {
-    repl = '<p class="ink-toc-empty">暂无标题</p>';
-  } else {
-    const buildList = (idx: number, minLevel: number): { html: string; next: number } => {
-      let out = '<ul>';
-      while (idx < heads.length) {
-        const h = heads[idx];
-        if (h.level < minLevel) break;
-        if (h.level > minLevel) {
-          const sub = buildList(idx, h.level);
-          out += `<li>${sub.html}`;
-          idx = sub.next;
-          out += '</li>';
-          continue;
-        }
-        const anchor = slugify(h.text);
-        out += `<li><a href="#${anchor}">${escapeHtml(h.text)}</a></li>`;
-        idx++;
-      }
-      out += '</ul>';
-      return { html: out, next: idx };
-    };
-    const { html } = buildList(0, heads[0].level);
-    repl = `<nav class="ink-toc"><div class="ink-toc-title">目录</div>${html}</nav>`;
-  }
-  // 仅替换代码块之外的 [[toc]],代码块内的原样保留
-  return mapOutsideCode(content, (s) => s.replace(/\[\[toc\]\]/g, repl));
-}
-
-
-function addHeadingIds(html: string, heads: Heading[]): string {
-  const used = new Map<string, number>();
-  const slugList = heads.map((h) => {
-    const base = slugify(h.text);
-    const count = used.get(base) ?? 0;
-    used.set(base, count + 1);
-    return count === 0 ? base : `${base}-${count + 1}`;
-  });
-  let idx = 0;
-  return html.replace(/<h([1-6])>/g, (_m, level) => {
-    if (idx >= slugList.length) return `<h${level}>`;
-    const id = slugList[idx++];
-    return `<h${level} id="${id}" class="ink-heading">`;
+/** 图片点击 → 打开灯箱(悬浮工具栏上的按钮除外) */
+function bindImageLightbox(root: HTMLElement) {
+  if ((root as any)._inkLightboxBound) return;
+  (root as any)._inkLightboxBound = true;
+  root.addEventListener("click", (e: Event) => {
+    const target = e.target as HTMLElement;
+    if (target.closest(".ink-image-toolbar")) return;
+    const img = target.closest<HTMLImageElement>(".ink-image-wrap img");
+    if (!img) return;
+    lightboxSrc.value = img.getAttribute("data-original") || img.getAttribute("src") || null;
   });
 }
 
-/**
- * 把渲染后的 <img> 包成可交互结构:
- *   <span class="ink-image-wrap" data-scale="100" data-align="center">
- *     <img src="..." data-original="..." />
- *     <span class="ink-image-toolbar"> ... 缩放/对齐 按钮 ... </span>
- *   </span>
- * 不写回 markdown,仅控制显示。
- */
-
-/**
- * 用 markdown-it 解析 content,提取每个表格在源 markdown 中的字符 offset 区间,
- * 用于表格编辑"保存到源"功能定位原段。
- * `token.map = [startLine, endLine]` 0-indexed 半开区间,lineToOffset 把行号转为字符 offset。
- */
-function findTableRanges(content: string): { start: number; end: number; md: string }[] {
-  let tokens: any[] = [];
-  try {
-    tokens = md.parse(content, {});
-  } catch {
-    return [];
-  }
-  const lines = content.split("\n");
-  const lineToOffset = (line0: number) => {
-    let off = 0;
-    for (let l = 0; l < line0 && l < lines.length; l++) off += lines[l].length + 1;
-    return off;
-  };
-  const ranges: { start: number; end: number; md: string }[] = [];
-  for (const t of tokens) {
-    if (t.type === "table_open" && t.map) {
-      const [sLine, eLine] = t.map as [number, number];
-      const start = lineToOffset(sLine);
-      const end = lineToOffset(eLine);
-      ranges.push({ start, end, md: content.slice(start, end) });
+/** 标题锚点点击 → 复制 #slug,便于在正文中引用该标题 */
+function bindHeadingAnchors(root: HTMLElement) {
+  if ((root as any)._inkHeadingBound) return;
+  (root as any)._inkHeadingBound = true;
+  root.addEventListener("click", async (e: Event) => {
+    const a = (e.target as HTMLElement).closest<HTMLAnchorElement>(".ink-heading-anchor");
+    if (!a) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const anchor = a.dataset.anchor || "";
+    try {
+      await navigator.clipboard.writeText(`#${anchor}`);
+      a.textContent = "✓";
+      window.setTimeout(() => { a.textContent = "#"; }, 1200);
+    } catch {
+      document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth" });
     }
-  }
-  return ranges;
-}
-function wrapImagesForInteraction(html: string): string {
-  return html.replace(/<img\s+([^>]*?)\/?>/g, (m, attrs: string) => {
-    const srcMatch = attrs.match(/\bsrc=["']([^"']+)["']/i);
-    if (!srcMatch) return m;
-    const src = srcMatch[1];
-    // 跳过 base64 / data / 已经在 asset 协议里的(可选)
-    return (
-      `<span class="ink-image-wrap" data-scale="100" data-align="center">` +
-        `<img ${attrs} data-original="${src.replace(/"/g, "&quot;")}" />` +
-        `<span class="ink-image-toolbar" contenteditable="false">` +
-          `<button type="button" data-act="zoom-out" title="缩小">−</button>` +
-          `<span class="ink-image-scale">100%</span>` +
-          `<button type="button" data-act="zoom-in" title="放大">+</button>` +
-          `<span class="ink-image-sep"></span>` +
-          `<button type="button" data-act="align-left" title="左对齐">⫷</button>` +
-          `<button type="button" data-act="align-center" title="居中">≡</button>` +
-          `<button type="button" data-act="align-right" title="右对齐">⫸</button>` +
-        `</span>` +
-      `</span>`
-    );
   });
-}
-
-/**
- * 把 markdown-it 渲染出的 `<pre><code class="language-xxx">…</code></pre>`
- * 包成 `<div class="ink-codeblock">` 并附加语言标签 + 复制按钮。
- * 行号这一版不做(留给后续版本),只做复制 + 语言徽标。
- */
-function wrapCodeBlocks(html: string): string {
-  return html.replace(
-    /<pre>\s*<code(?:\s+class="([^"]*)")?\s*>([\s\S]*?)<\/code>\s*<\/pre>/g,
-    (_m, cls: string | undefined, inner: string) => {
-      const langMatch = (cls || "").match(/language-([^\s"]+)/);
-      const lang = langMatch ? langMatch[1] : "";
-      const lineMatches = inner.match(/<div class="line">/g) || [];
-      const lineCount = Math.max(lineMatches.length, 1);
-      const nums = Array.from({ length: lineCount }, (_, i) => `<li>${i + 1}</li>`).join("");
-      return (
-        `<div class="ink-codeblock" data-lang="${lang}">` +
-          `<div class="ink-codeblock-toolbar">` +
-            `<span class="ink-codeblock-lang">${lang || "text"}</span>` +
-            `<button type="button" class="ink-codeblock-copy" data-act="copy-code">复制</button>` +
-          `</div>` +
-          `<div class="ink-codeblock-body">` +
-            `<pre class="${cls ? (cls.includes("hljs") ? "hljs" : "") : ""}">` +
-              `<ol class="ink-line-nums">${nums}</ol>` +
-              `<code${cls ? ` class="${cls}"` : ""}>${inner}</code>` +
-            `</pre>` +
-          `</div>` +
-        `</div>`
-      );
-    },
-  );
 }
 
 function bindCodeToolbar(root: HTMLElement) {
@@ -710,40 +497,6 @@ function bindCodeToolbar(root: HTMLElement) {
       console.error("复制失败:", err);
       btn.textContent = "复制失败";
     }
-  });
-}
-
-/**
- * 把渲染出的 `<table>` 包成 `<div class="ink-table">` 并附加工具栏。
- * 支持:
- *   - + 行 / - 行 / + 列 / - 列:直接改 DOM
- *   - 编辑模式:切换 td/th 的 contenteditable
- *   - 复制为 Markdown:把当前 DOM 表转回 md 字符串,写入剪贴板
- *   - 保存到源:把 DOM 表转 md,在源 markdown 中匹配 data-source-md 精确定位并替换
- * `tableRanges` 由 `findTableRanges(content)` 提供,顺序与渲染出的 <table> 一一对应。
- */
-function wrapTablesForEdit(
-  html: string,
-  tableRanges: { start: number; end: number; md: string }[],
-): string {
-  let idx = 0;
-  return html.replace(/<table>([\s\S]*?)<\/table>/g, (_m, inner: string) => {
-    const r = tableRanges[idx++];
-    const dataMd = r ? ` data-source-md="${encodeURIComponent(r.md)}"` : "";
-    return (
-      `<div class="ink-table" data-edit="false"${dataMd}>` +
-        `<div class="ink-table-toolbar">` +
-          `<button type="button" data-act="t-edit">✏️ 编辑</button>` +
-          `<button type="button" data-act="t-add-row">+ 行</button>` +
-          `<button type="button" data-act="t-del-row">- 行</button>` +
-          `<button type="button" data-act="t-add-col">+ 列</button>` +
-          `<button type="button" data-act="t-del-col">- 列</button>` +
-          `<button type="button" data-act="t-save">💾 保存到源</button>` +
-          `<button type="button" data-act="t-copy-md">复制为 Markdown</button>` +
-        `</div>` +
-        `<table>${inner}</table>` +
-      `</div>`
-    );
   });
 }
 
@@ -957,15 +710,40 @@ function bindTocNavigation(root: HTMLElement) {
 const activeTab = computed(() => tabs.value.find(t => t.id === activeTabId.value));
 
 const charCount = computed(() => activeTab.value?.content.length ?? 0);
+
+// 防抖后的渲染源:击键时 250ms 内不重复走全量渲染管线;切换 tab 时立即同步。
+// headings/wordCount 等重计算也读这个副本,避免每次击键全量扫描
+const renderContent = ref(activeTab.value?.content ?? "");
+let renderTimer: number | null = null;
+
+watch(
+  () => [activeTab.value?.id, activeTab.value?.content] as const,
+  ([newId], [oldId]) => {
+    if (newId !== oldId) {
+      if (renderTimer !== null) {
+        clearTimeout(renderTimer);
+        renderTimer = null;
+      }
+      renderContent.value = activeTab.value?.content ?? "";
+      return;
+    }
+    if (renderTimer !== null) clearTimeout(renderTimer);
+    renderTimer = window.setTimeout(() => {
+      renderTimer = null;
+      renderContent.value = activeTab.value?.content ?? "";
+    }, 250);
+  },
+);
+
 const wordCount = computed(() => {
-  const text = activeTab.value?.content.trim() ?? "";
+  const text = renderContent.value.trim();
   if (!text) return 0;
   return text.split(/\s+/).length;
 });
 
 const headings = computed(() => {
-  if (!activeTab.value) return [];
-  const content = activeTab.value.content;
+  const content = renderContent.value;
+  if (!content) return [];
   const result: Heading[] = [];
   const regex = /^#{1,6}\s+(.+)$/gm;
   let match;
@@ -977,79 +755,45 @@ const headings = computed(() => {
   return result;
 });
 
+// 预览渲染:与导出共用同一条管线(utils/markdown.ts),交互包装仅预览需要
 const renderedHTML = computed(() => {
   if (!activeTab.value) return "";
-  const pre1 = preprocessImageSrcs(activeTab.value.content, activeTab.value.path);
+  const { fm, body } = extractFrontMatter(renderContent.value);
+  const pre1 = preprocessImageSrcs(body, activeTab.value.path);
   const pre2 = preprocessToc(pre1, headings.value);
-  let html = md.render(pre2);
-
-  html = addHeadingIds(html, headings.value);
-
-  // Replace mermaid code blocks with placeholder divs (需读取 <code> 内容,故在代码块保护之前)
-  html = html.replace(/<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g, (_, code) => {
-    const id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
-    const decoded = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
-    return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}"></div>`;
-  });
-
-  // 暂存所有代码块(<pre> 含块级、<code> 含行内),避免后续 $...$ 公式正则穿透到代码内部
-  const codeStore: string[] = [];
-  const stash = (m: string) => {
-    const i = codeStore.length;
-    codeStore.push(m);
-    return `\u0000C${i}\u0000`;
-  };
-  html = html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/g, stash);
-  html = html.replace(/<code\b[^>]*>[\s\S]*?<\/code>/g, stash);
-
-  // 先处理块级公式（多行 $...$）
-  html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
-    try {
-      const cleanTex = tex.trim();
-      return `<div class="katex-display">${katex.renderToString(cleanTex, { throwOnError: false, displayMode: true })}</div>`;
-    } catch {
-      return `<div class="katex-error">${tex}</div>`;
-    }
-  });
-
-  // 再处理行内公式（单行 $...$）
-  html = html.replace(/\$([^$\n]+)\$/g, (_, tex) => {
-    try {
-      return katex.renderToString(tex, { throwOnError: false });
-    } catch {
-      return tex;
-    }
-  });
-
-  // 还原代码块
-  html = html.replace(/\u0000C(\d+)\u0000/g, (_, i) => codeStore[+i]);
-
-  // 包装 <img> 为可交互元素
-  html = wrapImagesForInteraction(html);
-  html = wrapCodeBlocks(html);
-  // 表格回写需要在原 markdown 字符级别定位,把每个 table 的源段挂到 div 上
-  const tableRanges = findTableRanges(pre2);
-  html = wrapTablesForEdit(html, tableRanges);
-  return html;
+  return renderFrontMatterCard(fm) + renderMarkdownHTML(pre2, headings.value, { interactive: true });
 });
 
-// Render mermaid diagrams in the preview
+// 渲染预览中的 mermaid 图;已按「主题+源码」渲染过的容器直接跳过,避免每次全量重渲染
 async function renderMermaidDiagrams() {
   try {
+    const themeKey = isDark.value ? "dark" : "default";
     const containers = document.querySelectorAll('.mermaid-diagram');
     for (const container of containers) {
       const code = decodeURIComponent(container.getAttribute('data-code') || '');
       const id = container.getAttribute('data-id') || '';
-      if (code && id) {
-        try {
-          const { svg } = await mermaid.render(`svg-${id}`, code);
-          container.innerHTML = svg;
-        } catch (e) {
-          container.innerHTML = `<pre class="mermaid-error">${code}</pre><p class="text-red-500 text-sm">渲染错误: ${e}</p>`;
-        }
+      if (!code || !id) continue;
+      if (container.getAttribute('data-rendered') === `${themeKey}|${code}`) continue;
+      try {
+        const { svg } = await mermaid.render(`svg-${id}`, code);
+        container.innerHTML = svg;
+      } catch (e) {
+        container.innerHTML = `<pre class="mermaid-error">${code}</pre><p class="text-red-500 text-sm">渲染错误: ${e}</p>`;
       }
+      container.setAttribute('data-rendered', `${themeKey}|${code}`);
     }
   } catch {}
+}
+
+// 切换亮暗后重初始化 mermaid 并重渲染既有图表(主题切换三处调用合一)
+function reinitMermaid(dark: boolean) {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: dark ? 'dark' : 'default',
+    securityLevel: 'loose',
+    fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+  });
+  nextTick(() => renderMermaidDiagrams());
 }
 
 // Watch for HTML changes to render mermaid diagrams
@@ -1063,6 +807,8 @@ watch(renderedHTML, () => {
       bindTocNavigation(root);
       bindCodeToolbar(root);
       bindTableToolbar(root);
+      bindHeadingAnchors(root);
+      bindImageLightbox(root);
     });
   });
 });
@@ -1085,9 +831,14 @@ watch(windowTitle, (title) => {
   setWindowTitle(title);
 });
 
-// 搜索词变化时重新搜索
+// 搜索词变化时防抖搜索(逐字符全量正则扫描代价高)
+let searchTimer: number | null = null;
 watch(searchQuery, () => {
-  performSearch();
+  if (searchTimer !== null) clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    searchTimer = null;
+    performSearch();
+  }, 200);
 });
 
 // 活动标签变化时清除搜索高亮
@@ -1604,375 +1355,17 @@ function navigateToHeading(line: number) {
     activeHeadingIndex.value = headIdx;
   }
 }
-
-// ========= 导出相关(V1.1.0 重做) =========
-
-/**
- * 截取当前主题快照:导出/打印时用来注入到产物里,保证所见即所得。
- * 返回:
- *   - dataTheme: <html data-theme> 的值
- *   - isDark:    是否暗色
- *   - fontFamily: 主题对应的字体栈
- *   - bodyBg/bodyColor: 主题背景/前景色
- */
-function captureCurrentTheme(): {
-  dataTheme: string;
-  isDark: boolean;
-  fontFamily: string;
-  bodyBg: string;
-  bodyColor: string;
-  highlightCss: string;
-} {
-  const theme = themeName.value;
-  const dark = isDark.value;
-  // 主题对应的字体栈(与 src/style.css 中保持一致)
-  const fontMap: Record<string, string> = {
-    inkstone: `'Segoe UI', system-ui, -apple-system, 'Microsoft YaHei', 'PingFang SC', sans-serif`,
-    github: `-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif`,
-    onedark: `'Source Code Pro', 'Cascadia Code', 'Fira Code', Consolas, ui-monospace, monospace`,
-    typora: `'Source Serif Pro', 'Georgia', 'Cambria', 'Times New Roman', serif`,
-  };
-  // 主题对应的背景/前景(从 style.css 抄出)
-  const colorMap: Record<string, { bg: string; fg: string }> = {
-    inkstone: { bg: dark ? '#1a1a1a' : '#fafafa', fg: dark ? '#e5e5e5' : '#1a1a1a' },
-    github: { bg: dark ? '#0d1117' : '#ffffff', fg: dark ? '#e6edf3' : '#1f2328' },
-    onedark: { bg: '#282c34', fg: '#abb2bf' },
-    typora: { bg: dark ? '#1f1f1f' : '#ffffff', fg: dark ? '#d0d0d0' : '#2c2c2c' },
-  };
-  const c = colorMap[theme] || colorMap.inkstone;
-  return {
-    dataTheme: theme,
-    isDark: dark,
-    fontFamily: fontMap[theme] || fontMap.inkstone,
-    bodyBg: c.bg,
-    bodyColor: c.fg,
-    highlightCss: dark ? hljsDarkCss : hljsLightCss,
-  };
-}
-
-
-/**
- * 把 markdown 中的本地图片内联为 data URI(base64),网络图片尝试 fetch 内联。
- * 不可用的图片保持原样。
- */
-async function inlineImagesInMarkdown(
-  markdown: string,
-  currentFilePath: string | null,
-): Promise<string> {
-  const re = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g;
-  type Hit = { start: number; end: number; alt: string; src: string };
-  const hits: Hit[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(markdown)) !== null) {
-    hits.push({ start: m.index, end: m.index + m[0].length, alt: m[1], src: m[2] });
-  }
-  if (hits.length === 0) return markdown;
-
-  let out = markdown;
-  for (let i = hits.length - 1; i >= 0; i--) {
-    const h = hits[i];
-    let newSrc = h.src;
-
-    if (/^(data:|blob:)/i.test(h.src)) {
-      continue;
-    } else if (/^https?:/i.test(h.src)) {
-      const inlined = await fetchAsDataUri(h.src);
-      if (inlined) newSrc = inlined;
-    } else {
-      // 本地路径
-      let absPath: string;
-      if (isAbsolutePath(h.src)) {
-        absPath = h.src.replace(/\\/g, "/");
-      } else if (currentFilePath) {
-        const dir = currentFilePath
-          .replace(/\\/g, "/")
-          .split("/")
-          .slice(0, -1)
-          .join("/");
-        absPath = dir + "/" + h.src;
-      } else {
-        continue;
-      }
-      try {
-        const bytes = (await invoke<number[]>("read_file_bytes", { path: absPath })) as number[];
-        const ext = absPath.split(".").pop() || "";
-        newSrc = `data:${getMimeFromExt(ext)};base64,${bytesToBase64(bytes)}`;
-      } catch (e) {
-        console.warn("导出图片内联失败:", absPath, e);
-        continue;
-      }
-    }
-
-    out = out.slice(0, h.start) + `![${h.alt}](${newSrc})` + out.slice(h.end);
-  }
-  return out;
-}
-
-/**
- * 渲染 markdown 到"可导出" HTML(不带交互包装)。
- * 流程与 renderedHTML 一致,但跳过 wrapImagesForInteraction / wrapCodeBlocks / wrapTablesForEdit。
- */
-function renderHTMLForExport(source: string): string {
-  let html = md.render(source);
-  // mermaid (需读取 <code> 内容,故在代码块保护之前)
-  html = html.replace(
-    /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
-    (_, code) => {
-      const id = "mermaid-" + Math.random().toString(36).slice(2, 11);
-      const decoded = code
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&amp;/g, "&")
-        .trim();
-      return `<div class="mermaid-diagram" data-id="${id}" data-code="${encodeURIComponent(decoded)}">${escapeHtml(decoded)}</div>`;
-    },
-  );
-  // 暂存所有代码块(<pre>/<code>),避免 $...$ 公式正则穿透到代码内部(与预览管线一致)
-  const codeStore: string[] = [];
-  const stash = (m: string) => {
-    const i = codeStore.length;
-    codeStore.push(m);
-    return `\u0000C${i}\u0000`;
-  };
-  html = html.replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/g, stash);
-  html = html.replace(/<code\b[^>]*>[\s\S]*?<\/code>/g, stash);
-  // 块级公式（多行 $...$）
-  html = html.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => {
-    try {
-      const cleanTex = tex.trim();
-      return `<div class="katex-display">${katex.renderToString(cleanTex, { throwOnError: false, displayMode: true })}</div>`;
-    } catch {
-      return `<div class="katex-error">${tex}</div>`;
-    }
-  });
-  // 行内公式（单行 $...$）
-  html = html.replace(/\$([^$\n]+)\$/g, (_, tex) => {
-    try {
-      return katex.renderToString(tex, { throwOnError: false });
-    } catch {
-      return tex;
-    }
-  });
-  // 还原代码块
-  html = html.replace(/\u0000C(\d+)\u0000/g, (_, i) => codeStore[+i]);
-  return html;
-}
-
-/**
- * 导出 HTML:单文件全内联,完全离线可打开。
- */
-async function exportHTML() {
-  if (!activeTab.value) return;
-  const tab = activeTab.value;
-  try {
-    const path = await save({
-      filters: [{ name: "HTML", extensions: ["html"] }],
-      defaultPath: tab.name.replace(/\.[^.]+$/, ".html"),
-    });
-    if (!path) return;
-
-    const theme = captureCurrentTheme();
-    const withInlinedImages = await inlineImagesInMarkdown(tab.content, tab.path);
-    const withToc = preprocessToc(withInlinedImages, headings.value);
-    const body = renderHTMLForExport(withToc);
-    const title = tab.name.replace(/\.[^.]+$/, "");
-
-    const htmlContent = `<!DOCTYPE html>
-<html lang="zh-CN" data-theme="${theme.dataTheme}"${theme.isDark ? ' class="dark"' : ""}>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${escapeHtml(title)}</title>
-<style>
-:root {
-  --ink-font: ${theme.fontFamily};
-  --ink-bg: ${theme.bodyBg};
-  --ink-fg: ${theme.bodyColor};
-}
-${EXPORT_BASE_CSS}
-${theme.highlightCss}
-${katexCss}
-${PRINT_CSS}
-</style>
-</head>
-<body>
-<div class="markdown-body">${body}</div>
-<script>
-${mermaidJs}
-(function() {
-  if (typeof mermaid === 'undefined') return;
-  try {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: ${theme.isDark ? "'dark'" : "'default'"},
-      securityLevel: 'loose',
-      fontFamily: 'inherit'
-    });
-    document.querySelectorAll('.mermaid-diagram[data-code]').forEach(function(el, i) {
-      var code = decodeURIComponent(el.getAttribute('data-code') || '');
-      if (!code) return;
-      var id = 'm-' + Date.now() + '-' + i;
-      mermaid.render(id, code).then(function(r) {
-        el.innerHTML = r.svg;
-      }).catch(function(e) {
-        el.innerHTML = '<pre class="mermaid-error">Mermaid 渲染失败: ' + (e.message || e) + '</pre>';
-      });
-    });
-  } catch (e) {
-    console.error('Mermaid init failed:', e);
-  }
-})();
-</` + `script>
-</body>
-</html>`;
-    await invoke("write_file", { path, content: htmlContent });
-  } catch (err) {
-    console.error("导出HTML失败:", err);
-  }
-}
-
-const showPrintHint = ref(false);
-
-/**
- * 组装打印用独立 HTML 文档(空 title 避免页眉显示应用名)。
- */
-function buildPrintHtml(bodyHtml: string, theme: ReturnType<typeof captureCurrentTheme>, title: string): string {
-  return `<!DOCTYPE html>
-<html lang="zh-CN" data-theme="${theme.dataTheme}"${theme.isDark ? ' class="dark"' : ""}>
-<head>
-<meta charset="UTF-8">
-<title>${escapeHtml(title)}</title>
-<style>
-:root {
-  --ink-font: ${theme.fontFamily};
-  --ink-bg: ${theme.isDark ? theme.bodyBg : '#ffffff'};
-  --ink-fg: ${theme.isDark ? theme.bodyColor : '#000000'};
-}
-${EXPORT_BASE_CSS}
-${theme.highlightCss}
-${katexCss}
-${PRINT_CSS}
-</style>
-</head>
-<body>
-<div class="markdown-body">${bodyHtml}</div>
-<script>
-${mermaidJs}
-(function() {
-  if (typeof mermaid === 'undefined') return;
-  try {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: ${theme.isDark ? "'dark'" : "'default'"},
-      securityLevel: 'loose',
-      fontFamily: 'inherit'
-    });
-    var diagrams = document.querySelectorAll('.mermaid-diagram[data-code]');
-    var pending = diagrams.length;
-    if (pending === 0) { window.dispatchEvent(new Event('mermaid-ready')); return; }
-    diagrams.forEach(function(el, i) {
-      var code = decodeURIComponent(el.getAttribute('data-code') || '');
-      if (!code) { if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready')); return; }
-      var id = 'm-' + Date.now() + '-' + i;
-      mermaid.render(id, code).then(function(r) {
-        el.innerHTML = r.svg;
-        if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready'));
-      }).catch(function(e) {
-        el.innerHTML = '<pre class="mermaid-error">Mermaid 渲染失败: ' + (e.message || e) + '</pre>';
-        if (--pending === 0) window.dispatchEvent(new Event('mermaid-ready'));
-      });
-    });
-  } catch (e) {
-    console.error('Mermaid init failed:', e);
-    window.dispatchEvent(new Event('mermaid-ready'));
-  }
-})();
-</` + `script>
-</body>
-</html>`;
-}
-
-/**
- * 等待 iframe 内图片、字体加载完成。
- */
-function waitForImagesAndFonts(win: Window): Promise<void> {
-  const imgPromises = Array.from(win.document.images).map((img) =>
-    img.complete
-      ? Promise.resolve()
-      : new Promise<void>((res) => {
-          img.onload = () => res();
-          img.onerror = () => res();
-        }),
-  );
-  const fontPromise = (win as any).fonts?.ready ?? Promise.resolve();
-  const mermaidPromise = new Promise<void>((res) => {
-    win.addEventListener('mermaid-ready', () => res(), { once: true });
-    setTimeout(() => res(), 5000);
-  });
-  return Promise.all([...imgPromises, fontPromise, mermaidPromise]).then(() => undefined);
-}
-
-/**
- * 构建隐藏 iframe 并打印纯文档内容(不含应用 chrome)。
- */
-async function printDocument(): Promise<void> {
-  const tab = activeTab.value;
-  if (!tab) return;
-
-  const withImages = await inlineImagesInMarkdown(tab.content, tab.path);
-  const withToc = preprocessToc(withImages, headings.value);
-  const bodyHtml = renderHTMLForExport(withToc);
-  const theme = captureCurrentTheme();
-  const title = tab.name.replace(/\.[^.]+$/, "") || "文档";
-  const docHtml = buildPrintHtml(bodyHtml, theme, title);
-
-  const iframe = document.createElement('iframe');
-  iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:0;height:0;border:0;';
-  document.body.appendChild(iframe);
-
-  // WebView2 打印"另存为 PDF"默认文件名取自主窗口 document.title(而非 iframe title),
-  // 故打印前临时切换为文档名,打印后恢复
-  const origDocTitle = document.title;
-  document.title = title;
-  try {
-    const doc = iframe.contentWindow!.document;
-    doc.open();
-    doc.write(docHtml);
-    doc.close();
-
-    await waitForImagesAndFonts(iframe.contentWindow!);
-
-    iframe.contentWindow!.focus();
-    iframe.contentWindow!.print();
-  } finally {
-    document.title = origDocTitle;
-    setTimeout(() => iframe.remove(), 2000);
-  }
-}
-
-async function exportPDF() {
-  if (!activeTab.value) return;
-  if (localStorage.getItem("pdfHintShown") === "true") {
-    try {
-      await printDocument();
-    } catch (e) {
-      console.error("打印失败:", e);
-    }
-  } else {
-    // 首次导出:先弹出说明,待用户确认后再打印
-    showPrintHint.value = true;
-  }
-}
-
-async function dismissPrintHint() {
-  showPrintHint.value = false;
-  localStorage.setItem("pdfHintShown", "true");
-  try {
-    await printDocument();
-  } catch (e) {
-    console.error("打印失败:", e);
-  }
-}
+// ========= 导出/打印(useExport composable) =========
+const { showPrintHint, exportHTML, exportPDF, dismissPrintHint } = useExport({
+  activeTab,
+  headings,
+  themeName,
+  isDark,
+  hljsTheme,
+  readerFont,
+  readerFontSize,
+  readerWidth,
+});
 
 function toggleSidebar() {
   showSidebar.value = !showSidebar.value;
@@ -1983,13 +1376,7 @@ function toggleDark() {
   document.documentElement.classList.toggle("dark", isDark.value);
   localStorage.setItem('isDark', String(isDark.value));
   // Update mermaid theme and re-render diagrams
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: isDark.value ? 'dark' : 'default',
-    securityLevel: 'loose',
-    fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-  });
-  nextTick(() => renderMermaidDiagrams());
+  reinitMermaid(isDark.value);
 }
 
 // 滚动同步切换
@@ -2019,49 +1406,47 @@ function getVisiblePreview(): HTMLElement | null {
   return previews[0] || null;
 }
 
+// 持有同步锁:锁定期内程序化滚动产生的回声事件不会反向同步。
+// 全局只保留一个定时器并在每次同步时重置——若像旧实现那样每次新起定时器,
+// 连续滚动时旧定时器会提前解锁,两个方向来回回写造成抖动。
+function holdSyncLock(src: 'editor' | 'preview') {
+  syncingFrom = src;
+  if (syncingFromTimer !== null) clearTimeout(syncingFromTimer);
+  syncingFromTimer = window.setTimeout(() => {
+    syncingFrom = null;
+    syncingFromTimer = null;
+  }, 100);
+}
+
 // 编辑器滚动 -> 同步预览
 function syncPreviewFromEditor() {
   if (!scrollSync.value || !showSplit.value) return;
   if (syncingFrom === 'preview') return;
-  syncingFrom = 'editor';
   const textarea = getVisibleEditor();
   const preview = getVisiblePreview();
-  if (!textarea || !preview) {
-    syncingFrom = null;
-    return;
-  }
+  if (!textarea || !preview) return;
   const editorMax = textarea.scrollHeight - textarea.clientHeight;
   const previewMax = preview.scrollHeight - preview.clientHeight;
-  if (editorMax <= 0 || previewMax <= 0) {
-    setTimeout(() => { syncingFrom = null; }, 80);
-    return;
-  }
+  if (editorMax <= 0 || previewMax <= 0) return;
   const ratio = textarea.scrollTop / editorMax;
+  holdSyncLock('editor');
   preview.scrollTop = ratio * previewMax;
-  setTimeout(() => { syncingFrom = null; }, 80);
 }
 
 // 预览滚动 -> 同步编辑器
 function syncEditorFromPreview() {
   if (!scrollSync.value || !showSplit.value) return;
   if (syncingFrom === 'editor') return;
-  syncingFrom = 'preview';
   const textarea = getVisibleEditor();
   const preview = getVisiblePreview();
-  if (!textarea || !preview) {
-    syncingFrom = null;
-    return;
-  }
+  if (!textarea || !preview) return;
   const editorMax = textarea.scrollHeight - textarea.clientHeight;
   const previewMax = preview.scrollHeight - preview.clientHeight;
-  if (editorMax <= 0 || previewMax <= 0) {
-    setTimeout(() => { syncingFrom = null; }, 80);
-    return;
-  }
+  if (editorMax <= 0 || previewMax <= 0) return;
   const ratio = preview.scrollTop / previewMax;
+  holdSyncLock('preview');
   textarea.scrollTop = ratio * editorMax;
   updateActiveHeadingFromScroll();
-  setTimeout(() => { syncingFrom = null; }, 80);
 }
 
 // 根据预览滚动位置更新当前激活的大纲项
@@ -2123,7 +1508,7 @@ function performSearch() {
 }
 
 function highlightCurrentMatch() {
-  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
+  const textarea = getVisibleEditor();
   if (!textarea || currentMatchIndex.value < 0 || searchMatches.value.length === 0) return;
   const match = searchMatches.value[currentMatchIndex.value];
   textarea.focus();
@@ -2145,7 +1530,7 @@ function searchPrev() {
 function replaceCurrent() {
   if (!activeTab.value || currentMatchIndex.value < 0 || searchMatches.value.length === 0) return;
   const match = searchMatches.value[currentMatchIndex.value];
-  const textarea = document.querySelector('.editor-input:not([style*="display: none"])') as HTMLTextAreaElement;
+  const textarea = getVisibleEditor();
   if (!textarea) return;
   const content = activeTab.value.content;
   activeTab.value.content = content.slice(0, match.index) + replaceQuery.value + content.slice(match.index + match.length);
@@ -2290,12 +1675,7 @@ onMounted(async () => {
   }
 
   // Initialize mermaid with theme
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: isDark.value ? 'dark' : 'default',
-    securityLevel: 'loose',
-    fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-  });
+  reinitMermaid(isDark.value);
 
   // 加载最近文件
   loadRecentFiles();
@@ -2349,6 +1729,9 @@ onMounted(async () => {
         case "dark":
           toggleDark();
           break;
+        case "preferences":
+          showSettings.value = true;
+          break;
         case "shortcuts":
           showShortcutsModal.value = true;
           break;
@@ -2388,6 +1771,11 @@ onMounted(async () => {
           const idx = order.indexOf(viewMode.value);
           setViewMode(order[(idx + 1) % order.length]);
         }
+        // Ctrl+, 打开阅读偏好
+        if (e.key === ",") {
+          e.preventDefault();
+          showSettings.value = true;
+        }
       }
       // F7 切换滚动同步
       if (e.key === "F7") {
@@ -2407,6 +1795,9 @@ onMounted(async () => {
         } else if (showAboutModal.value) {
           e.preventDefault();
           showAboutModal.value = false;
+        } else if (showSettings.value) {
+          e.preventDefault();
+          showSettings.value = false;
         } else if (showSearch.value) {
           e.preventDefault();
           closeSearch();
@@ -2414,13 +1805,21 @@ onMounted(async () => {
       }
     });
 
-    // 监听光标位置变化
+    // 监听光标/选区变化,统计选中文本字数。
+    // 注意:document 级 selectionchange 在部分 Chromium(含 WebView2)上不为
+    // textarea 选区触发,所以编辑器侧必须挂元素级事件;两者并存,值一致。
+    const onEditorSelectionChange = (e: Event) => {
+      const ta = e.target as HTMLTextAreaElement;
+      selectedCount.value = ta.selectionEnd - ta.selectionStart;
+    };
+    document.querySelectorAll<HTMLTextAreaElement>(".editor-input").forEach(ta => {
+      ta.addEventListener("selectionchange", onEditorSelectionChange);
+    });
     document.addEventListener("selectionchange", () => {
-      // 计算选中文本字数
-      const selection = window.getSelection();
-      if (selection && activeTab.value) {
-        const selectedText = selection.toString();
-        selectedCount.value = selectedText.length;
+      // 只统计编辑器内的选区;标签栏/预览/侧边栏等非文档区域的选择一律不计
+      const ae = document.activeElement;
+      if (ae instanceof HTMLTextAreaElement && ae.classList.contains("editor-input")) {
+        selectedCount.value = ae.selectionEnd - ae.selectionStart;
       } else {
         selectedCount.value = 0;
       }
@@ -2458,7 +1857,6 @@ onUnmounted(() => {
 <template>
   <div
     class="h-full flex flex-col"
-    :class="{ dark: isDark }"
     @dragenter="handleDragEnter"
     @dragleave="handleDragLeave"
     @dragover="handleDragOver"
@@ -2498,6 +1896,7 @@ onUnmounted(() => {
       @set-view-mode="setViewMode"
       @set-theme="setTheme"
       @toggle-dark="toggleDark"
+      @open-settings="showSettings = true"
     />
 
     <!-- PDF 打印提示 -->
@@ -2542,25 +1941,25 @@ onUnmounted(() => {
               @click="sidebarMode = 'tree'"
               class="px-2 py-1 rounded text-xs flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
               :class="sidebarMode === 'tree' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'hover:bg-gray-200 dark:hover:bg-gray-700'"
+              title="文件树"
             >
-              <span>📁</span>
-              <span>文件树</span>
+              <FolderTree :size="14" />
             </button>
             <button
               @click="sidebarMode = 'outline'"
               class="px-2 py-1 rounded text-xs flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
               :class="sidebarMode === 'outline' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'hover:bg-gray-200 dark:hover:bg-gray-700'"
+              title="大纲"
             >
-              <span>📋</span>
-              <span>大纲</span>
+              <ListTree :size="14" />
             </button>
             <button
               @click="sidebarMode = 'recent'"
               class="px-2 py-1 rounded text-xs flex items-center justify-center gap-1 transition-colors whitespace-nowrap"
               :class="sidebarMode === 'recent' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'hover:bg-gray-200 dark:hover:bg-gray-700'"
+              title="最近文件"
             >
-              <span>🕐</span>
-              <span>最近</span>
+              <Clock :size="14" />
             </button>
             <button
               @click="sidebarMode = 'assets'"
@@ -2568,8 +1967,7 @@ onUnmounted(() => {
               :class="sidebarMode === 'assets' ? 'bg-blue-500 text-white dark:bg-blue-600' : 'hover:bg-gray-200 dark:hover:bg-gray-700'"
               title="当前文档引用到的图片/资源"
             >
-              <span>🖼️</span>
-              <span>资源</span>
+              <ImageIcon :size="14" />
             </button>
           </div>
           <!-- 文件树视图(双区:应用内库 + 外部文件夹,逻辑见 useWorkspace) -->
@@ -2721,58 +2119,27 @@ onUnmounted(() => {
     />
 
     <!-- 快捷键对话框 -->
-    <ShortcutsModal v-model="showShortcutsModal" :shortcuts="SHORTCUTS" />
+    <ShortcutsModal v-model="showShortcutsModal" />
 
     <!-- 关于对话框 -->
     <AboutModal v-model="showAboutModal" :version="appVersion" />
+
+    <!-- 阅读偏好设置 -->
+    <SettingsModal
+      :show="showSettings"
+      :reader-font="readerFont"
+      :reader-font-size="readerFontSize"
+      :reader-width="readerWidth"
+      :hljs-theme="hljsTheme"
+      :hljs-theme-options="HLJS_THEME_OPTIONS"
+      @close="showSettings = false"
+      @set-font="(v) => setReaderPref('font', v)"
+      @set-font-size="(v) => setReaderPref('fontSize', v)"
+      @set-width="(v) => setReaderPref('width', v)"
+      @set-hljs-theme="setHljsTheme"
+    />
+
+    <!-- 图片灯箱 -->
+    <Lightbox :src="lightboxSrc" @close="lightboxSrc = null" />
   </div>
 </template>
-
-<style scoped>
-/* 自定义滚动条样式 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
-}
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-}
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/* KaTeX 块级公式样式 */
-.katex-display {
-  display: block;
-  text-align: center;
-  margin: 1em 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.katex-error {
-  color: #dc2626;
-  background: #fee2e2;
-  padding: 0.5em;
-  border-radius: 4px;
-  font-family: monospace;
-}
-
-.dark .katex-error {
-  background: #7f1d1d;
-  color: #fecaca;
-}
-</style>

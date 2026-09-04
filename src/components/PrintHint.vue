@@ -42,6 +42,7 @@ const emit = defineEmits<{
   color: #374151;
   font-size: 13px;
   line-height: 1.5;
+  animation: print-hint-in 200ms ease-out;
 }
 .print-hint-icon {
   color: #2563eb;
@@ -81,5 +82,4 @@ const emit = defineEmits<{
   from { opacity: 0; transform: translate(-50%, -8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
-.print-hint { animation: print-hint-in 200ms ease-out; }
 </style>

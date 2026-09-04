@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { getFileName } from '../utils';
+
 defineProps<{
   saved: boolean;
   path: string | null;
@@ -12,11 +14,6 @@ defineProps<{
 defineEmits<{
   'toggle-scroll-sync': [];
 }>();
-
-function baseName(p: string | null): string {
-  if (!p) return '未命名文档';
-  return p.split(/[/\\]/).pop() ?? p;
-}
 </script>
 
 <template>
@@ -25,7 +22,7 @@ function baseName(p: string | null): string {
       {{ saved ? '✓ 已保存' : '● 未保存' }}
     </span>
     <span class="truncate max-w-48" :title="path || '未命名文档'">
-      {{ baseName(path) }}
+      {{ path ? getFileName(path) : '未命名文档' }}
     </span>
     <span>{{ charCount }} 字符</span>
     <span>{{ wordCount }} 词</span>
